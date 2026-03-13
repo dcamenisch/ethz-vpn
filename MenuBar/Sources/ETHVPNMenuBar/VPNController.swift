@@ -28,7 +28,9 @@ final class VPNController {
     // MARK: - Public API
 
     func connect(profile: VPNProfile? = nil) {
-        guard !isOpenconnectRunning() else { return }
+        // Gate on our state machine, not pgrep — avoids a race where the
+        // sudo/openconnect process is still dying but pgrep still finds it.
+        guard case .disconnected = state else { return }
         let store = ProfileStore.shared
         guard let target = profile ?? store.activeProfile else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
@@ -90,15 +92,19 @@ final class VPNController {
             let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
             let errText = String(data: errData, encoding: .utf8) ?? ""
             DispatchQueue.main.async {
-                self?.openconnectProcess = nil
-                self?.setState(.disconnected)
+                guard let self else { return }
+                // Only update state if this is still the active process —
+                // prevents a stale termination handler from clobbering a
+                // reconnect that already launched a new process.
+                guard self.openconnectProcess === proc else { return }
+                self.openconnectProcess = nil
+                self.setState(.disconnected)
                 if proc.terminationStatus != 0 {
-                    // Surface first meaningful stderr line in the notification
                     let detail = errText
                         .components(separatedBy: .newlines)
                         .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
                         ?? "status \(proc.terminationStatus)"
-                    self?.postNotification(title: "ETH VPN", body: "Connection failed: \(detail)")
+                    self.postNotification(title: "ETH VPN", body: "Connection failed: \(detail)")
                 }
             }
         }
@@ -120,6 +126,7 @@ final class VPNController {
     func disconnect() {
         guard isOpenconnectRunning() else { return }
         setState(.disconnecting)
+        openconnectProcess = nil  // disown so any pending terminationHandler is a no-op
         shell("/usr/bin/sudo", ["/usr/bin/pkill", "-SIGINT", "-x", "openconnect"])
         // Force-kill fallback: if still running after 6s, send SIGKILL
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
