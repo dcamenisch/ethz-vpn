@@ -106,7 +106,7 @@ struct VPNProfile: Codable, Identifiable, Equatable {
         let realmURL = dir.appendingPathComponent("ethzvpnrealm.txt")
         let realm = (try? String(contentsOf: realmURL, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines))
-            .flatMap { $0.isEmpty ? nil : $0 } ?? "student-net"
+            .flatMap { $0.isEmpty ? nil : $0 } ?? AppConstants.defaultRealm
 
         // Migrate Keychain entries to new keys
         let profile = VPNProfile(id: "default", displayName: "Default", username: username, realm: realm)

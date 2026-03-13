@@ -218,7 +218,7 @@ struct ProfileEditFormView: View {
                 }
                 GridRow {
                     Text("Realm").gridColumnAlignment(.trailing)
-                    TextField("student-net", text: $vm.realm)
+                    TextField(AppConstants.defaultRealm, text: $vm.realm)
                         .focused($focus, equals: .realm)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -289,7 +289,7 @@ struct ProfileEditFormView: View {
             title       = profile == nil ? "Add Profile" : "Edit Profile"
         }
         username  = profile?.username ?? ""
-        realm     = profile?.realm ?? "student-net"
+        realm     = profile?.realm ?? AppConstants.defaultRealm
         if let p = profile {
             password  = ProfileStore.shared.password(for: p) ?? ""
             otpSecret = ProfileStore.shared.token(for: p) ?? ""
@@ -303,7 +303,7 @@ struct ProfileEditFormView: View {
         let trimName     = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimOTP      = otpSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimRealm    = realm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "student-net"
+        let trimRealm    = realm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AppConstants.defaultRealm
                            : realm.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimName.isEmpty     else { errorMessage = "Name is required.";     return }

@@ -17,10 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        buildMenu()
+        buildMenu()  // calls rebuildProfilesSubmenu() at end
         setupVPNController()
         performFirstRunChecksIfNeeded()
-        updateUI(for: VPNController.shared.state)
+        updateUI(for: VPNController.shared.state)  // icon + labels only
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(showSetupTapped),
@@ -83,15 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
-            // Right-click: toggle connect/disconnect
-            switch VPNController.shared.state {
-            case .disconnected:
-                VPNController.shared.connect()
-            case .connected:
-                VPNController.shared.disconnect()
-            default:
-                break // ignore clicks while transitioning
-            }
+            VPNController.shared.toggleConnection()
         } else {
             // Left-click: show the menu
             statusItem.menu = menu
@@ -102,7 +94,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildProfilesSubmenu() {
         let store = ProfileStore.shared
-        store.load()
         let profiles = store.profiles
         let submenu = profilesConnectMenuItem.submenu!
         submenu.removeAllItems()
@@ -174,11 +165,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - UI
 
     private func updateUI(for state: VPNState) {
-        rebuildProfilesSubmenu()
-        let isConnected = { if case .connected = state { return true }; return false }()
-        let isTransitioning = { if case .connecting = state { return true }
-            if case .disconnecting = state { return true }; return false }()
-
         switch state {
         case .connected(let ip):
             setIcon(systemName: "lock.fill")
@@ -199,9 +185,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.title = "○ Disconnected"
         }
 
-        connectMenuItem.isEnabled = !isConnected && !isTransitioning
-        profilesConnectMenuItem.isEnabled = !isConnected && !isTransitioning
-        disconnectMenuItem.isHidden = !isConnected
+        connectMenuItem.isEnabled = !state.isConnected && !state.isTransitioning
+        profilesConnectMenuItem.isEnabled = !state.isConnected && !state.isTransitioning
+        disconnectMenuItem.isHidden = !state.isConnected
     }
 
     private func setIcon(systemName: String) {

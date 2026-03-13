@@ -7,6 +7,16 @@ enum VPNState {
     case connecting
     case disconnected
     case disconnecting
+
+    var isConnected: Bool    { if case .connected    = self { return true }; return false }
+    var isTransitioning: Bool { if case .connecting  = self { return true }
+                                if case .disconnecting = self { return true }; return false }
+}
+
+// MARK: - App-wide constants
+enum AppConstants {
+    static let appName        = "ETH VPN"
+    static let defaultRealm   = "student-net"
 }
 
 final class VPNController {
@@ -58,7 +68,8 @@ final class VPNController {
 
         // Write token config to a temp file (mode 0600) so the secret never
         // appears in the process argument list (visible via `ps aux`).
-        let configPath = "/tmp/eth-vpn-\(UUID().uuidString).conf"
+        let configPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("eth-vpn-\(UUID().uuidString).conf").path
         let configContent = "token-mode=totp\ntoken-secret=sha1:base32:\(token)\n"
         let configData = configContent.data(using: .utf8)!
         FileManager.default.createFile(atPath: configPath, contents: configData,
@@ -104,7 +115,7 @@ final class VPNController {
                         .components(separatedBy: .newlines)
                         .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
                         ?? "status \(proc.terminationStatus)"
-                    self.postNotification(title: "ETH VPN", body: "Connection failed: \(detail)")
+                    self.postNotification(body: "Connection failed: \(detail)")
                 }
             }
         }
@@ -119,7 +130,16 @@ final class VPNController {
         } catch {
             try? FileManager.default.removeItem(atPath: configPath)
             setState(.disconnected)
-            postNotification(title: "ETH VPN", body: "Failed to launch openconnect: \(error.localizedDescription)")
+            postNotification(body: "Failed to launch openconnect: \(error.localizedDescription)")
+        }
+    }
+
+    /// Connects if disconnected, disconnects if connected, no-ops while transitioning.
+    func toggleConnection() {
+        switch state {
+        case .disconnected: connect()
+        case .connected:    disconnect()
+        default: break
         }
     }
 
@@ -162,7 +182,7 @@ final class VPNController {
             case .connected:
                 if !running {
                     self.setState(.disconnected)
-                    self.postNotification(title: "ETH VPN", body: "VPN disconnected unexpectedly.")
+                    self.postNotification(body: "VPN disconnected unexpectedly.")
                 } else {
                     // Refresh IP
                     let ip = self.vpnIP() ?? ""
@@ -243,9 +263,9 @@ final class VPNController {
 
     func resolvedOpenconnectPath() -> String { bundledOpenconnectPath() }
 
-    private func postNotification(title: String, body: String) {
+    func postNotification(body: String) {
         let content = UNMutableNotificationContent()
-        content.title = title
+        content.title = AppConstants.appName
         content.body = body
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
