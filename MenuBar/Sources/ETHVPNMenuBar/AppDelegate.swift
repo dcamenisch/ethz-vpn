@@ -70,8 +70,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
 
-        statusItem.menu = menu
+        // Do NOT assign statusItem.menu — that would suppress custom click handling.
+        // Instead, handle clicks manually so right-click can toggle the VPN.
+        if let button = statusItem.button {
+            button.action = #selector(statusItemClicked(_:))
+            button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
         rebuildProfilesSubmenu()
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            // Right-click: toggle connect/disconnect
+            switch VPNController.shared.state {
+            case .disconnected:
+                VPNController.shared.connect()
+            case .connected:
+                VPNController.shared.disconnect()
+            default:
+                break // ignore clicks while transitioning
+            }
+        } else {
+            // Left-click: show the menu
+            statusItem.menu = menu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil  // remove again so right-click still works next time
+        }
     }
 
     private func rebuildProfilesSubmenu() {
