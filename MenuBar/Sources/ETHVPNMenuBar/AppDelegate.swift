@@ -6,11 +6,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var menu: NSMenu!
 
-    // Menu items we need to update
     private var statusMenuItem: NSMenuItem!
-    private var connectMenuItem: NSMenuItem!
+    private var connectMenuItem: NSMenuItem!        // shown when disconnected, no profiles
+    private var profilesConnectMenuItem: NSMenuItem! // submenu when profiles exist
     private var disconnectMenuItem: NSMenuItem!
-    private var reconnectMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
 
     var setupWindowController: SetupWindowController?
@@ -21,9 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()
         setupVPNController()
         performFirstRunChecksIfNeeded()
-        if SecretsHelper.areComplete() {
-            updateUI(for: VPNController.shared.state)
-        }
+        updateUI(for: VPNController.shared.state)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(showSetupTapped),
@@ -43,9 +40,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        connectMenuItem = NSMenuItem(title: "Connect", action: #selector(connectTapped), keyEquivalent: "")
+        // Simple "Connect" — shown when only one profile or no profiles yet
+        connectMenuItem = NSMenuItem(title: "Connect", action: #selector(connectDefaultTapped), keyEquivalent: "")
         connectMenuItem.target = self
         menu.addItem(connectMenuItem)
+
+        // "Connect ▶" submenu — shown when multiple profiles exist
+        profilesConnectMenuItem = NSMenuItem(title: "Connect", action: nil, keyEquivalent: "")
+        profilesConnectMenuItem.submenu = NSMenu()
+        menu.addItem(profilesConnectMenuItem)
 
         disconnectMenuItem = NSMenuItem(title: "Disconnect", action: #selector(disconnectTapped), keyEquivalent: "")
         disconnectMenuItem.target = self
@@ -53,15 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        reconnectMenuItem = NSMenuItem(title: "Reconnect", action: #selector(reconnectTapped), keyEquivalent: "")
-        reconnectMenuItem.target = self
-        menu.addItem(reconnectMenuItem)
-
-        menu.addItem(.separator())
-
-        let setup = NSMenuItem(title: "Setup / Reinstall Helper...", action: #selector(showSetupTapped), keyEquivalent: "")
-        setup.target = self
-        menu.addItem(setup)
+        let manageProfiles = NSMenuItem(title: "Manage Profiles...", action: #selector(showSetupTapped), keyEquivalent: "")
+        manageProfiles.target = self
+        menu.addItem(manageProfiles)
 
         launchAtLoginMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchAtLoginMenuItem.target = self
@@ -74,15 +71,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quit)
 
         statusItem.menu = menu
+        rebuildProfilesSubmenu()
+    }
+
+    private func rebuildProfilesSubmenu() {
+        let store = ProfileStore.shared
+        store.load()
+        let profiles = store.profiles
+        let submenu = profilesConnectMenuItem.submenu!
+        submenu.removeAllItems()
+
+        for profile in profiles {
+            let item = NSMenuItem(title: profile.displayName, action: #selector(connectProfileTapped(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = profile.id
+            if store.activeProfileID == profile.id {
+                item.state = .on
+            }
+            submenu.addItem(item)
+        }
+
+        if profiles.count > 1 {
+            connectMenuItem.isHidden = true
+            profilesConnectMenuItem.isHidden = false
+        } else {
+            // 0 or 1 profile: use simple item
+            connectMenuItem.isHidden = false
+            profilesConnectMenuItem.isHidden = true
+            if let only = profiles.first {
+                connectMenuItem.title = "Connect (\(only.displayName))"
+            } else {
+                connectMenuItem.title = "Connect"
+            }
+        }
     }
 
     // MARK: - VPN wiring
 
     private func setupVPNController() {
         VPNController.shared.onStateChange = { [weak self] state in
-            DispatchQueue.main.async {
-                self?.updateUI(for: state)
-            }
+            DispatchQueue.main.async { self?.updateUI(for: state) }
         }
     }
 
@@ -95,8 +123,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - First-run
 
     private func performFirstRunChecksIfNeeded() {
-        guard !SecretsHelper.areComplete() || !SudoersHelper.isInstalled(openconnectPath: VPNController.shared.resolvedOpenconnectPath()) else { return }
-        openSetupWindow()
+        let store = ProfileStore.shared
+        guard store.hasAnyCompleteProfile,
+              SudoersHelper.isInstalled(openconnectPath: VPNController.shared.resolvedOpenconnectPath())
+        else { openSetupWindow(); return }
     }
 
     @objc func showSetupTapped() {
@@ -108,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setupWindowController = SetupWindowController()
             setupWindowController?.onComplete = { [weak self] in
                 self?.setupWindowController = nil
+                self?.rebuildProfilesSubmenu()
                 self?.updateUI(for: VPNController.shared.state)
             }
         }
@@ -117,36 +148,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - UI
 
     private func updateUI(for state: VPNState) {
+        rebuildProfilesSubmenu()
+        let isConnected = { if case .connected = state { return true }; return false }()
+        let isTransitioning = { if case .connecting = state { return true }
+            if case .disconnecting = state { return true }; return false }()
+
         switch state {
         case .connected(let ip):
             setIcon(systemName: "lock.fill")
-            let ipLabel = ip.isEmpty ? "Connected" : "Connected — \(ip)"
-            statusMenuItem.title = "● \(ipLabel)"
-            connectMenuItem.isHidden = true
-            disconnectMenuItem.isHidden = false
-            reconnectMenuItem.isHidden = false
-
+            let label = ip.isEmpty ? "Connected" : "Connected — \(ip)"
+            if let active = ProfileStore.shared.activeProfile {
+                statusMenuItem.title = "● \(label) (\(active.displayName))"
+            } else {
+                statusMenuItem.title = "● \(label)"
+            }
         case .connecting:
             setIcon(systemName: "clock")
             statusMenuItem.title = "Connecting..."
-            connectMenuItem.isHidden = true
-            disconnectMenuItem.isHidden = true
-            reconnectMenuItem.isHidden = true
-
         case .disconnecting:
             setIcon(systemName: "clock")
             statusMenuItem.title = "Disconnecting..."
-            connectMenuItem.isHidden = true
-            disconnectMenuItem.isHidden = true
-            reconnectMenuItem.isHidden = true
-
         case .disconnected:
             setIcon(systemName: "lock.open.fill")
             statusMenuItem.title = "○ Disconnected"
-            connectMenuItem.isHidden = false
-            disconnectMenuItem.isHidden = true
-            reconnectMenuItem.isHidden = true
         }
+
+        connectMenuItem.isEnabled = !isConnected && !isTransitioning
+        profilesConnectMenuItem.isEnabled = !isConnected && !isTransitioning
+        disconnectMenuItem.isHidden = !isConnected
     }
 
     private func setIcon(systemName: String) {
@@ -158,16 +187,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    @objc private func connectTapped() {
+    @objc private func connectDefaultTapped() {
         VPNController.shared.connect()
+    }
+
+    @objc private func connectProfileTapped(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let profile = ProfileStore.shared.profiles.first(where: { $0.id == id })
+        else { return }
+        VPNController.shared.connect(profile: profile)
     }
 
     @objc private func disconnectTapped() {
         VPNController.shared.disconnect()
-    }
-
-    @objc private func reconnectTapped() {
-        VPNController.shared.reconnect()
     }
 
     @objc private func toggleLaunchAtLogin() {

@@ -47,4 +47,15 @@ enum KeychainHelper {
         ]
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
+
+    @discardableResult
+    static func delete(service: String) -> Bool {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: NSUserName()
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
 }

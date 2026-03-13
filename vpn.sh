@@ -4,8 +4,8 @@ set -euo pipefail
 IFS=$'\n\t'
 
 readonly SECRETS_DIR="${HOME}/.local/share/ethz-vpn-connect"
-readonly USERNAME_FILE="${SECRETS_DIR}/ethzvpnusername.txt"
-readonly REALM_FILE="${SECRETS_DIR}/ethzvpnrealm.txt"
+readonly PROFILES_FILE="${SECRETS_DIR}/profiles.json"
+readonly ACTIVE_PROFILE_KEY="eth-vpn-active-profile-id"
 readonly LOGGER_TAG="eth-vpn"
 readonly VPN_HOST="sslvpn.ethz.ch"
 readonly DEFAULT_REALM="student-net"
@@ -32,10 +32,10 @@ else
 	RED='' GREEN='' YELLOW='' RESET=''
 fi
 
-info()    { printf '%s\n'           "$*"; }
-success() { printf "${GREEN}%s${RESET}\n"  "$*"; }
-warn()    { printf "${YELLOW}%s${RESET}\n" "$*" >&2; }
-error()   { printf "${RED}%s${RESET}\n"   "$*" >&2; }
+info()    { printf '%s\n'                    "$*"; }
+success() { printf "${GREEN}%s${RESET}\n"   "$*"; }
+warn()    { printf "${YELLOW}%s${RESET}\n"  "$*" >&2; }
+error()   { printf "${RED}%s${RESET}\n"     "$*" >&2; }
 
 # ---------------------------------------------------------------------------
 # macOS notifications
@@ -45,8 +45,6 @@ notify() {
 	osascript -e "display notification \"$message\" with title \"$title\"" 2>/dev/null || true
 }
 
-# ---------------------------------------------------------------------------
-
 log_event() {
 	local message=$1
 	logger -t "$LOGGER_TAG" "$message" 2>/dev/null || true
@@ -54,25 +52,28 @@ log_event() {
 
 print_usage() {
 	cat <<'EOF'
-eth-vpn — ETH Zurich VPN helper (wraps openconnect with Keychain integration)
+eth-vpn — ETH Zurich VPN helper (wraps openconnect with Keychain + profile support)
 
-Usage: eth-vpn <command>
+Usage: eth-vpn <command> [profile-name]
 
 Commands:
-  connect|c        Connect to ETH VPN
-  disconnect|d|dc  Disconnect active ETH VPN session
-  reconnect|r      Disconnect (if running) then connect
-  status|s         Show whether openconnect is running
-  setup            Create or update secrets in Keychain
-  migrate          Migrate old encrypted secret files to Keychain
-  -h|--help        Show this help message
+  connect [name]    Connect using a named profile (or the default profile)
+  disconnect|d      Disconnect active ETH VPN session
+  status|s          Show whether openconnect is running
+  profiles          List all saved profiles
+  add               Add a new profile interactively
+  edit <name>       Edit an existing profile
+  delete <name>     Delete a profile
+  default <name>    Set the default profile
+  -h|--help         Show this help message
 
 Examples:
   eth-vpn connect
+  eth-vpn connect staff
   eth-vpn disconnect
-  eth-vpn reconnect
-  eth-vpn setup
-  eth-vpn migrate
+  eth-vpn profiles
+  eth-vpn add
+  eth-vpn default student
 EOF
 }
 
@@ -94,8 +95,7 @@ ensure_prereqs() {
 }
 
 require_non_empty() {
-	local label=$1
-	local value=$2
+	local label=$1 value=$2
 	if [[ -z "$value" ]]; then
 		error "Error: $label cannot be empty."
 		return 1
@@ -115,39 +115,144 @@ keychain_set() {
 	security add-generic-password -a "${USER}" -s "$service" -w "$value" -U
 }
 
-ensure_secrets_exist() {
-	local missing=()
-	if ! security find-generic-password -a "${USER}" -s "eth-vpn-password" >/dev/null 2>&1; then
-		missing+=("eth-vpn-password (Keychain)")
+keychain_delete() {
+	local service=$1
+	security delete-generic-password -a "${USER}" -s "$service" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Profile store (thin JSON parser using python3 / awk fallback)
+# ---------------------------------------------------------------------------
+
+# Requires python3 (available on every modern macOS).
+_py() { python3 -c "$1" 2>/dev/null; }
+
+profiles_list() {
+	if [[ ! -f "$PROFILES_FILE" ]]; then
+		echo ""
+		return
 	fi
-	if ! security find-generic-password -a "${USER}" -s "eth-vpn-token" >/dev/null 2>&1; then
-		missing+=("eth-vpn-token (Keychain)")
-	fi
-	if [[ ! -f "$USERNAME_FILE" ]]; then
-		missing+=("$USERNAME_FILE")
-	fi
-	if (( ${#missing[@]} )); then
-		error "Error: Secrets missing (${missing[*]}). Run \"eth-vpn setup\" first."
-		return 1
+	_py "
+import json, sys
+data = json.load(open('${PROFILES_FILE}'))
+for p in data:
+    print(p['id'])
+"
+}
+
+profile_get_field() {
+	local id=$1 field=$2
+	_py "
+import json
+data = json.load(open('${PROFILES_FILE}'))
+for p in data:
+    if p['id'] == '${id}':
+        print(p.get('${field}', ''))
+        break
+"
+}
+
+profile_exists() {
+	local id=$1
+	[[ -n "$(profile_get_field "$id" "id")" ]]
+}
+
+profiles_save() {
+	# Called after a Python script that writes the file; nothing to do here.
+	:
+}
+
+profile_upsert() {
+	local id=$1 display=$2 username=$3 realm=$4
+	_py "
+import json, os
+path = '${PROFILES_FILE}'
+data = json.load(open(path)) if os.path.exists(path) else []
+found = False
+for p in data:
+    if p['id'] == '${id}':
+        p.update({'displayName': '${display}', 'username': '${username}', 'realm': '${realm}'})
+        found = True
+        break
+if not found:
+    data.append({'id': '${id}', 'displayName': '${display}', 'username': '${username}', 'realm': '${realm}'})
+json.dump(data, open(path, 'w'), indent=2)
+"
+}
+
+profile_delete_entry() {
+	local id=$1
+	_py "
+import json, os
+path = '${PROFILES_FILE}'
+if not os.path.exists(path): exit(0)
+data = json.load(open(path))
+data = [p for p in data if p['id'] != '${id}']
+json.dump(data, open(path, 'w'), indent=2)
+"
+}
+
+get_active_profile_id() {
+	defaults read com.apple.ETHVPNMenuBar "${ACTIVE_PROFILE_KEY}" 2>/dev/null \
+		|| _py "
+import json, os
+path = '${PROFILES_FILE}'
+if not os.path.exists(path): exit(1)
+data = json.load(open(path))
+if data: print(data[0]['id'])
+" 2>/dev/null || echo ""
+}
+
+set_active_profile_id() {
+	local id=$1
+	defaults write com.apple.ETHVPNMenuBar "${ACTIVE_PROFILE_KEY}" "$id" 2>/dev/null || true
+}
+
+resolve_profile_id() {
+	local name=${1:-}
+	if [[ -n "$name" ]]; then
+		# Accept either id or displayName (case-insensitive)
+		local matched
+		matched=$(_py "
+import json, os
+path = '${PROFILES_FILE}'
+if not os.path.exists(path): exit(1)
+data = json.load(open(path))
+needle = '${name}'.lower()
+for p in data:
+    if p['id'].lower() == needle or p['displayName'].lower() == needle:
+        print(p['id'])
+        break
+" 2>/dev/null || echo "")
+		if [[ -z "$matched" ]]; then
+			error "Error: No profile named \"${name}\" found."
+			return 1
+		fi
+		echo "$matched"
+	else
+		local active
+		active=$(get_active_profile_id)
+		if [[ -z "$active" ]]; then
+			# Fall back to first profile
+			active=$(profiles_list | head -1)
+		fi
+		if [[ -z "$active" ]]; then
+			error "Error: No profiles configured. Run \"eth-vpn add\" first."
+			return 1
+		fi
+		echo "$active"
 	fi
 }
+
+# ---------------------------------------------------------------------------
+# VPN operations
+# ---------------------------------------------------------------------------
 
 openconnect_running() {
 	pgrep -x openconnect >/dev/null 2>&1
 }
 
-current_realm() {
-	local realm=$DEFAULT_REALM
-	if [[ -f "$REALM_FILE" ]]; then
-		realm=$(<"$REALM_FILE")
-		realm=${realm//[[:space:]]/}
-	fi
-	realm=${realm:-$DEFAULT_REALM}
-	printf '%s' "$realm"
-}
-
 show_vpn_ip() {
-	# openconnect typically creates utun0..utunN; find the one with an inet addr
 	local iface ip
 	for iface in $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^utun'); do
 		ip=$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2; exit}')
@@ -158,57 +263,53 @@ show_vpn_ip() {
 	done
 }
 
-write_plain_secret() {
-	local value=$1
-	local dest=$2
-	local tmp
-	local prev_umask
-	prev_umask=$(umask)
-	umask 077
-	tmp=$(mktemp "${dest}.XXXX")
-	umask "$prev_umask"
-	printf '%s\n' "$value" >"$tmp"
-	chmod 600 "$tmp"
-	mv "$tmp" "$dest"
-}
-
 connect() {
+	local profile_name=${1:-}
 	ensure_prereqs
-	ensure_secrets_exist
-	if ! PASSWORD=$(keychain_get "eth-vpn-password"); then
-		error "Error: Could not read eth-vpn-password from Keychain. Run \"eth-vpn setup\" first."
+
+	local id
+	id=$(resolve_profile_id "$profile_name") || return 1
+
+	local USERNAME REALM
+	USERNAME=$(profile_get_field "$id" "username")
+	REALM=$(profile_get_field "$id" "realm")
+	REALM=${REALM:-$DEFAULT_REALM}
+	require_non_empty "Username" "$USERNAME"
+
+	if ! PASSWORD=$(keychain_get "eth-vpn-password-${id}"); then
+		error "Error: Could not read password for profile \"${id}\" from Keychain. Run \"eth-vpn add\" or \"eth-vpn edit ${id}\"."
 		return 1
 	fi
-	if ! TOKEN=$(keychain_get "eth-vpn-token"); then
-		error "Error: Could not read eth-vpn-token from Keychain. Run \"eth-vpn setup\" first."
+	if ! TOKEN=$(keychain_get "eth-vpn-token-${id}"); then
+		error "Error: Could not read OTP secret for profile \"${id}\" from Keychain."
 		return 1
 	fi
+
 	require_non_empty "Password" "$PASSWORD"
 	require_non_empty "Token" "$TOKEN"
-	local USERNAME
-	USERNAME=$(<"$USERNAME_FILE")
-	USERNAME=${USERNAME//[[:space:]]/}
-	require_non_empty "Username" "$USERNAME"
-	local REALM
-	REALM=$(current_realm)
-	require_non_empty "Realm" "$REALM"
+
 	if openconnect_running; then
 		error 'Error: openconnect already running. Use "eth-vpn disconnect" first.'
 		return 1
 	fi
-	info "Connecting ${USERNAME}@${REALM}.ethz.ch via group \"${REALM}\"..."
-	log_event "Connecting ${USERNAME}@${REALM}.ethz.ch"
+
+	local display
+	display=$(profile_get_field "$id" "displayName")
+	info "Connecting [${display}] ${USERNAME}@${REALM}.ethz.ch via group \"${REALM}\"..."
+	log_event "Connecting [${display}] ${USERNAME}@${REALM}.ethz.ch"
+	set_active_profile_id "$id"
+
 	if printf '%s\n' "$PASSWORD" | sudo openconnect -b -u "${USERNAME}@${REALM}.ethz.ch" -g "$REALM" \
 		--useragent=AnyConnect --passwd-on-stdin --token-mode=totp \
 		--token-secret="sha1:base32:${TOKEN}" --no-external-auth "$VPN_HOST"; then
 		success 'VPN connected successfully.'
-		log_event "VPN connected for ${USERNAME}@${REALM}.ethz.ch"
-		notify "ETH VPN" "Connected as ${USERNAME}@${REALM}.ethz.ch"
+		log_event "VPN connected for [${display}] ${USERNAME}@${REALM}.ethz.ch"
+		notify "ETH VPN" "Connected as ${USERNAME}@${REALM}.ethz.ch (${display})"
 		show_vpn_ip
 	else
 		local status=$?
-		error "Error: openconnect exited with status ${status}. Check the log output above."
-		log_event "VPN connection failed (${status}) for ${USERNAME}@${REALM}.ethz.ch"
+		error "Error: openconnect exited with status ${status}."
+		log_event "VPN connection failed (${status}) for [${display}] ${USERNAME}@${REALM}.ethz.ch"
 		notify "ETH VPN" "Connection failed (status ${status})"
 		return $status
 	fi
@@ -226,7 +327,6 @@ disconnect() {
 		done
 		if openconnect_running; then
 			warn 'Warning: openconnect still running after SIGINT.'
-			log_event "VPN disconnect: openconnect still running after SIGINT"
 			notify "ETH VPN" "Disconnect may have failed — process still running"
 		else
 			success 'VPN disconnected successfully.'
@@ -239,12 +339,6 @@ disconnect() {
 	fi
 }
 
-reconnect() {
-	disconnect 2>/dev/null || true
-	sleep 1
-	connect
-}
-
 status() {
 	if openconnect_running; then
 		info 'openconnect is running (PIDs):'
@@ -255,139 +349,198 @@ status() {
 	fi
 }
 
-setup() {
-	ensure_prereqs
-	info 'You are about to overwrite ETH VPN secrets. Press Ctrl+C to abort.'
-	echo
-	read -rp $'ETH Username (without @...): ' USERNAME
-	USERNAME=${USERNAME//[[:space:]]/}
-	require_non_empty "Username" "$USERNAME"
-	read -rsp $'ETHZ WLAN Password: ' PASSWORD; echo
-	require_non_empty "WLAN password" "$PASSWORD"
-	read -rsp $'ETHZ OTP Secret: ' TOKEN; echo
-	require_non_empty "OTP secret" "$TOKEN"
-	local realm_input
-	read -rp $'VPN realm/group [student-net]: ' realm_input
-	local REALM
-	REALM=${realm_input:-$DEFAULT_REALM}
-	REALM=${REALM//[[:space:]]/}
-	require_non_empty "Realm" "$REALM"
-	umask 077
-	mkdir -p "$SECRETS_DIR"
-	chmod 700 "$SECRETS_DIR"
-	if keychain_set "eth-vpn-password" "$PASSWORD"; then
-		success 'WLAN password saved to Keychain (eth-vpn-password).'
-	else
-		error 'Error: Failed to save password to Keychain.'
-		return 1
+# ---------------------------------------------------------------------------
+# Profile management commands
+# ---------------------------------------------------------------------------
+
+cmd_profiles() {
+	local ids
+	ids=$(profiles_list)
+	if [[ -z "$ids" ]]; then
+		info "No profiles configured. Run \"eth-vpn add\" to create one."
+		return
 	fi
-	if keychain_set "eth-vpn-token" "$TOKEN"; then
-		success 'OTP secret saved to Keychain (eth-vpn-token).'
-	else
-		error 'Error: Failed to save OTP secret to Keychain.'
-		return 1
-	fi
-	write_plain_secret "$USERNAME" "$USERNAME_FILE"
-	write_plain_secret "$REALM" "$REALM_FILE"
-	success "Setup complete. Username and realm stored in ${SECRETS_DIR}."
-	# Migration notice: remove old encrypted files if they exist
-	local old_token="${SECRETS_DIR}/ethzvpntoken.secret"
-	local old_pass="${SECRETS_DIR}/ethzvpnpass.secret"
-	if [[ -f "$old_token" || -f "$old_pass" ]]; then
-		warn "Note: Old encrypted secret files found. You can safely delete them:"
-		[[ -f "$old_token" ]] && warn "  rm ${old_token}"
-		[[ -f "$old_pass" ]] && warn "  rm ${old_pass}"
-	fi
+	local active
+	active=$(get_active_profile_id)
+	info "Saved profiles:"
+	while IFS= read -r id; do
+		[[ -z "$id" ]] && continue
+		local display username realm
+		display=$(profile_get_field "$id" "displayName")
+		username=$(profile_get_field "$id" "username")
+		realm=$(profile_get_field "$id" "realm")
+		local marker=""
+		[[ "$id" == "$active" ]] && marker=" [default]"
+		printf '  %-20s  %s@%s%s\n' "${display}${marker}" "$username" "$realm" ""
+	done <<< "$ids"
 }
 
-migrate() {
-	local old_token="${SECRETS_DIR}/ethzvpntoken.secret"
-	local old_pass="${SECRETS_DIR}/ethzvpnpass.secret"
+cmd_add() {
+	ensure_prereqs
+	echo 'Adding a new VPN profile. Press Ctrl+C to abort.'
+	echo
+	local display username realm password otp
 
-	if [[ ! -f "$old_token" && ! -f "$old_pass" ]]; then
-		info 'No old encrypted secret files found. Nothing to migrate.'
+	read -rp $'Profile name (e.g. Student, Staff): ' display
+	display=${display//[[:space:]]/ }
+	require_non_empty "Profile name" "$display"
+
+	local id
+	id=$(echo "$display" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+	if profile_exists "$id"; then
+		error "Error: A profile with id \"${id}\" already exists. Use \"eth-vpn edit ${id}\" to update it."
+		return 1
+	fi
+
+	read -rp $'ETH Username (without @...): ' username
+	username=${username//[[:space:]]/}
+	require_non_empty "Username" "$username"
+
+	read -rsp $'ETHZ WLAN Password: ' password; echo
+	require_non_empty "Password" "$password"
+
+	read -rsp $'ETHZ OTP Secret: ' otp; echo
+	require_non_empty "OTP secret" "$otp"
+
+	read -rp $'VPN realm/group [student-net]: ' realm
+	realm=${realm:-$DEFAULT_REALM}
+	realm=${realm//[[:space:]]/}
+	require_non_empty "Realm" "$realm"
+
+	mkdir -p "$SECRETS_DIR"
+	profile_upsert "$id" "$display" "$username" "$realm"
+	keychain_set "eth-vpn-password-${id}" "$password"
+	keychain_set "eth-vpn-token-${id}" "$otp"
+
+	# Set as default if it's the first profile
+	local first_id
+	first_id=$(profiles_list | head -1)
+	if [[ "$first_id" == "$id" ]]; then
+		set_active_profile_id "$id"
+	fi
+
+	success "Profile \"${display}\" saved."
+}
+
+cmd_edit() {
+	local name=${1:-}
+	if [[ -z "$name" ]]; then error "Usage: eth-vpn edit <profile-name>"; return 1; fi
+
+	local id
+	id=$(resolve_profile_id "$name") || return 1
+
+	local cur_display cur_username cur_realm
+	cur_display=$(profile_get_field "$id" "displayName")
+	cur_username=$(profile_get_field "$id" "username")
+	cur_realm=$(profile_get_field "$id" "realm")
+
+	info "Editing profile \"${cur_display}\". Press Enter to keep current value."
+	echo
+
+	local display username realm password otp
+
+	read -rp $"Profile name [${cur_display}]: " display
+	display=${display:-$cur_display}
+
+	read -rp $"ETH Username [${cur_username}]: " username
+	username=${username:-$cur_username}
+	username=${username//[[:space:]]/}
+
+	read -rsp $'ETHZ WLAN Password (leave blank to keep): ' password; echo
+	if [[ -z "$password" ]]; then
+		password=$(keychain_get "eth-vpn-password-${id}" || echo "")
+	fi
+	require_non_empty "Password" "$password"
+
+	read -rsp $'ETHZ OTP Secret (leave blank to keep): ' otp; echo
+	if [[ -z "$otp" ]]; then
+		otp=$(keychain_get "eth-vpn-token-${id}" || echo "")
+	fi
+	require_non_empty "OTP secret" "$otp"
+
+	read -rp $"VPN realm/group [${cur_realm}]: " realm
+	realm=${realm:-$cur_realm}
+	realm=${realm//[[:space:]]/}
+	require_non_empty "Realm" "$realm"
+
+	profile_upsert "$id" "$display" "$username" "$realm"
+	keychain_set "eth-vpn-password-${id}" "$password"
+	keychain_set "eth-vpn-token-${id}" "$otp"
+	success "Profile \"${display}\" updated."
+}
+
+cmd_delete() {
+	local name=${1:-}
+	if [[ -z "$name" ]]; then error "Usage: eth-vpn delete <profile-name>"; return 1; fi
+
+	local id
+	id=$(resolve_profile_id "$name") || return 1
+	local display
+	display=$(profile_get_field "$id" "displayName")
+
+	read -rp $"Delete profile \"${display}\"? [y/N]: " confirm
+	if [[ "${confirm,,}" != "y" ]]; then
+		info "Aborted."
 		return 0
 	fi
 
-	info 'Found old encrypted secret files:'
-	[[ -f "$old_pass" ]] && info "  ${old_pass}"
-	[[ -f "$old_token" ]] && info "  ${old_token}"
-	echo
+	keychain_delete "eth-vpn-password-${id}"
+	keychain_delete "eth-vpn-token-${id}"
+	profile_delete_entry "$id"
 
-	require_tool openssl
-
-	local encpass
-	if ! encpass=$(security find-generic-password -a "${USER}" -s "eth-vpn-encpass" -w 2>/dev/null); then
-		read -rsp $'Encryption Password (used when secrets were created): ' encpass; echo
-	else
-		info '(Encryption password read from Keychain.)'
-	fi
-	require_non_empty "Encryption password" "$encpass"
-
-	if [[ -f "$old_pass" ]]; then
-		local decrypted_pass
-		if ! decrypted_pass=$(printf '%s\n' "$encpass" | openssl enc -aes-256-cbc -pbkdf2 -d -a -in "$old_pass" -pass stdin 2>/dev/null); then
-			error 'Error: Failed to decrypt password file. Wrong encryption password?'
-			return 1
-		fi
-		require_non_empty "Decrypted password" "$decrypted_pass"
-		if keychain_set "eth-vpn-password" "$decrypted_pass"; then
-			success 'WLAN password migrated to Keychain (eth-vpn-password).'
-		else
-			error 'Error: Failed to save password to Keychain.'
-			return 1
-		fi
+	local active
+	active=$(get_active_profile_id)
+	if [[ "$active" == "$id" ]]; then
+		local next
+		next=$(profiles_list | head -1)
+		[[ -n "$next" ]] && set_active_profile_id "$next"
 	fi
 
-	if [[ -f "$old_token" ]]; then
-		local decrypted_token
-		if ! decrypted_token=$(printf '%s\n' "$encpass" | openssl enc -aes-256-cbc -pbkdf2 -d -a -in "$old_token" -pass stdin 2>/dev/null); then
-			error 'Error: Failed to decrypt token file. Wrong encryption password?'
-			return 1
-		fi
-		require_non_empty "Decrypted token" "$decrypted_token"
-		if keychain_set "eth-vpn-token" "$decrypted_token"; then
-			success 'OTP secret migrated to Keychain (eth-vpn-token).'
-		else
-			error 'Error: Failed to save OTP secret to Keychain.'
-			return 1
-		fi
-	fi
-
-	echo
-	read -rp $'Delete old encrypted files? [y/N]: ' confirm
-	if [[ "${confirm,,}" == "y" ]]; then
-		[[ -f "$old_pass" ]]  && rm -f "$old_pass"  && info "Deleted ${old_pass}"
-		[[ -f "$old_token" ]] && rm -f "$old_token" && info "Deleted ${old_token}"
-		# Remove old encpass Keychain item if present
-		security delete-generic-password -a "${USER}" -s "eth-vpn-encpass" 2>/dev/null && \
-			info 'Removed eth-vpn-encpass from Keychain.' || true
-		success 'Migration complete. Old files removed.'
-	else
-		success 'Migration complete. Old files kept (remove them manually when ready).'
-	fi
+	success "Profile \"${display}\" deleted."
 }
+
+cmd_default() {
+	local name=${1:-}
+	if [[ -z "$name" ]]; then error "Usage: eth-vpn default <profile-name>"; return 1; fi
+
+	local id
+	id=$(resolve_profile_id "$name") || return 1
+	set_active_profile_id "$id"
+	local display
+	display=$(profile_get_field "$id" "displayName")
+	success "Default profile set to \"${display}\"."
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 main() {
 	local cmd=${1:-}
 	case "$cmd" in
 		connect|c)
-			connect
+			connect "${2:-}"
 			;;
 		disconnect|d|dc)
 			disconnect
 			;;
-		reconnect|r)
-			reconnect
-			;;
 		status|s)
 			status
 			;;
-		setup)
-			setup
+		profiles|list)
+			cmd_profiles
 			;;
-		migrate)
-			migrate
+		add)
+			cmd_add
+			;;
+		edit)
+			cmd_edit "${2:-}"
+			;;
+		delete|remove)
+			cmd_delete "${2:-}"
+			;;
+		default)
+			cmd_default "${2:-}"
 			;;
 		-h|--help)
 			print_usage

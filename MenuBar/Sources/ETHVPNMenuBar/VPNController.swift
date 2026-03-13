@@ -27,17 +27,28 @@ final class VPNController {
 
     // MARK: - Public API
 
-    func connect() {
+    func connect(profile: VPNProfile? = nil) {
         guard !isOpenconnectRunning() else { return }
+        let store = ProfileStore.shared
+        guard let target = profile ?? store.activeProfile else {
+            NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
+            return
+        }
         guard
-            let password = KeychainHelper.get(service: "eth-vpn-password"),
-            let token = KeychainHelper.get(service: "eth-vpn-token"),
-            let username = SecretsHelper.readUsername()
+            let password = store.password(for: target),
+            let token    = store.token(for: target)
         else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
             return
         }
-        let realm = SecretsHelper.readRealm() ?? "student-net"
+        let username = target.username
+        let realm    = target.realm
+        guard !username.isEmpty else {
+            NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
+            return
+        }
+        // Remember this as the active profile
+        store.activeProfileID = target.id
 
         setState(.connecting)
 
@@ -115,13 +126,6 @@ final class VPNController {
             guard case .disconnecting = self?.state else { return }
             _ = self?.shell("/usr/bin/sudo", ["/usr/bin/pkill", "-SIGKILL", "-x", "openconnect"])
             self?.setState(.disconnected)
-        }
-    }
-
-    func reconnect() {
-        disconnect()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            self?.connect()
         }
     }
 

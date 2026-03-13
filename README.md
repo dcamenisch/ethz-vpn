@@ -1,6 +1,6 @@
 # ETH VPN
 
-Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with TOTP and Keychain integration.
+Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with TOTP and Keychain integration. Supports multiple named profiles for different realms or accounts.
 
 **Architecture:** Apple Silicon (arm64) only.
 
@@ -13,7 +13,7 @@ Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with
 | `ETH VPN.app` | Menu bar app — click to connect/disconnect |
 | `vpn.sh` | CLI wrapper for terminal use |
 
-Both share the same Keychain entries and config files, so setup done in the app works in the shell and vice versa.
+Both share the same Keychain entries and profile store, so setup done in the app works in the shell and vice versa.
 
 ---
 
@@ -21,15 +21,35 @@ Both share the same Keychain entries and config files, so setup done in the app 
 
 1. Download `ETH VPN.zip`, unzip, move `ETH VPN.app` anywhere (e.g. `/Applications`)
 2. Double-click the app
-3. Complete the one-time setup wizard:
+3. The **Manage Profiles** window opens automatically on first launch
+4. Click **Add Profile** and fill in:
+   - **Name** — a label for this config (e.g. `Student`, `Staff`)
    - **Username** — your ETH username without `@ethz.ch`
    - **WLAN Password** — your ETH network password
    - **OTP Secret** — the base32 TOTP secret from your authenticator setup
    - **Realm** — leave as `student-net` unless you have a different group
-4. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
-5. Use the menu bar icon to connect and disconnect
+5. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
+6. Use the menu bar icon to connect and disconnect
 
 Subsequent launches skip the wizard automatically.
+
+---
+
+## Multiple profiles
+
+You can create as many profiles as you like (e.g. one for `student-net`, one for `staff-net`).
+
+**In the menu bar app:**
+- Open **Manage Profiles...** to add, edit, delete, or set a default profile
+- When you have more than one profile, the **Connect** menu expands into a submenu listing all profiles
+- The active (last-used) profile is shown with a checkmark
+
+**In the CLI:**
+```
+eth-vpn connect staff        Connect using the "staff" profile
+eth-vpn default student      Set "student" as the default
+eth-vpn profiles             List all profiles
+```
 
 ---
 
@@ -88,16 +108,18 @@ chmod +x vpn.sh
 ```
 
 ```
-eth-vpn connect       Connect to ETH VPN
-eth-vpn disconnect    Disconnect
-eth-vpn reconnect     Disconnect then reconnect
-eth-vpn status        Show connection status
-eth-vpn setup         Create or update secrets in Keychain (CLI equivalent of the setup wizard)
-eth-vpn migrate       Migrate old encrypted secret files to Keychain
-eth-vpn --help        Show help
+eth-vpn connect [name]    Connect (optionally specify a profile name)
+eth-vpn disconnect        Disconnect
+eth-vpn status            Show connection status
+eth-vpn profiles          List all saved profiles
+eth-vpn add               Add a new profile interactively
+eth-vpn edit <name>       Edit an existing profile
+eth-vpn delete <name>     Delete a profile
+eth-vpn default <name>    Set the default profile
+eth-vpn --help            Show help
 ```
 
-The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwordless operation. Run the app's setup wizard first (or `eth-vpn setup` to configure via terminal).
+The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwordless operation. Run the app's **Manage Profiles** window first, or use `eth-vpn add` to configure via terminal.
 
 ---
 
@@ -105,10 +127,10 @@ The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwo
 
 | Secret | Where |
 |--------|-------|
-| WLAN password | macOS Keychain (`eth-vpn-password`) |
-| OTP secret | macOS Keychain (`eth-vpn-token`) |
-| Username | `~/.local/share/ethz-vpn-connect/ethzvpnusername.txt` |
-| Realm | `~/.local/share/ethz-vpn-connect/ethzvpnrealm.txt` |
+| WLAN password (per profile) | macOS Keychain (`eth-vpn-password-<profile-id>`) |
+| OTP secret (per profile) | macOS Keychain (`eth-vpn-token-<profile-id>`) |
+| Profile list | `~/.local/share/ethz-vpn-connect/profiles.json` |
+| Active profile ID | `UserDefaults` (`com.apple.ETHVPNMenuBar`) |
 
 The sudoers rule is written to `/etc/sudoers.d/eth-vpn` and allows the current user to run openconnect and `pkill` without a password.
 
@@ -116,7 +138,7 @@ The sudoers rule is written to `/etc/sudoers.d/eth-vpn` and allows the current u
 
 ## Reinstalling or moving the app
 
-If you move the `.app` to a different path, the sudoers rule will point to the old binary location. Use **Setup / Reinstall Helper...** in the menu bar to rewrite it.
+If you move the `.app` to a different path, the sudoers rule will point to the old binary location. Open **Manage Profiles...** and re-save any profile to rewrite the sudoers rule.
 
 ---
 
@@ -131,9 +153,9 @@ Or manually:
 ```bash
 rm -rf ~/Applications/ETH\ VPN.app
 sudo rm -f /etc/sudoers.d/eth-vpn
-# Remove Keychain entries
-security delete-generic-password -a "$USER" -s eth-vpn-password
-security delete-generic-password -a "$USER" -s eth-vpn-token
+# Remove Keychain entries for each profile (replace <id> with your profile id)
+security delete-generic-password -a "$USER" -s eth-vpn-password-<id>
+security delete-generic-password -a "$USER" -s eth-vpn-token-<id>
 # Remove config files
 rm -rf ~/.local/share/ethz-vpn-connect
 ```
