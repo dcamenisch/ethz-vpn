@@ -52,9 +52,9 @@ log_event() {
 
 print_usage() {
 	cat <<'EOF'
-eth-vpn — ETH Zurich VPN helper (wraps openconnect with Keychain + profile support)
+ethz-vpn — ETH Zurich VPN helper (wraps openconnect with Keychain + profile support)
 
-Usage: eth-vpn <command> [profile-name]
+Usage: ethz-vpn <command> [profile-name]
 
 Commands:
   connect [name]    Connect using a named profile (or the default profile)
@@ -68,12 +68,12 @@ Commands:
   -h|--help         Show this help message
 
 Examples:
-  eth-vpn connect
-  eth-vpn connect staff
-  eth-vpn disconnect
-  eth-vpn profiles
-  eth-vpn add
-  eth-vpn default student
+  ethz-vpn connect
+  ethz-vpn connect staff
+  ethz-vpn disconnect
+  ethz-vpn profiles
+  ethz-vpn add
+  ethz-vpn default student
 EOF
 }
 
@@ -237,7 +237,7 @@ for p in data:
 			active=$(profiles_list | head -1)
 		fi
 		if [[ -z "$active" ]]; then
-			error "Error: No profiles configured. Run \"eth-vpn add\" first."
+			error "Error: No profiles configured. Run \"ethz-vpn add\" first."
 			return 1
 		fi
 		echo "$active"
@@ -277,7 +277,7 @@ connect() {
 	require_non_empty "Username" "$USERNAME"
 
 	if ! PASSWORD=$(keychain_get "eth-vpn-password-${id}"); then
-		error "Error: Could not read password for profile \"${id}\" from Keychain. Run \"eth-vpn add\" or \"eth-vpn edit ${id}\"."
+		error "Error: Could not read password for profile \"${id}\" from Keychain. Run \"ethz-vpn add\" or \"ethz-vpn edit ${id}\"."
 		return 1
 	fi
 	if ! TOKEN=$(keychain_get "eth-vpn-token-${id}"); then
@@ -289,7 +289,7 @@ connect() {
 	require_non_empty "Token" "$TOKEN"
 
 	if openconnect_running; then
-		error 'Error: openconnect already running. Use "eth-vpn disconnect" first.'
+		error 'Error: openconnect already running. Use "ethz-vpn disconnect" first.'
 		return 1
 	fi
 
@@ -357,7 +357,7 @@ cmd_profiles() {
 	local ids
 	ids=$(profiles_list)
 	if [[ -z "$ids" ]]; then
-		info "No profiles configured. Run \"eth-vpn add\" to create one."
+		info "No profiles configured. Run \"ethz-vpn add\" to create one."
 		return
 	fi
 	local active
@@ -388,7 +388,7 @@ cmd_add() {
 	local id
 	id=$(echo "$display" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
 	if profile_exists "$id"; then
-		error "Error: A profile with id \"${id}\" already exists. Use \"eth-vpn edit ${id}\" to update it."
+		error "Error: A profile with id \"${id}\" already exists. Use \"ethz-vpn edit ${id}\" to update it."
 		return 1
 	fi
 
@@ -424,7 +424,7 @@ cmd_add() {
 
 cmd_edit() {
 	local name=${1:-}
-	if [[ -z "$name" ]]; then error "Usage: eth-vpn edit <profile-name>"; return 1; fi
+	if [[ -z "$name" ]]; then error "Usage: ethz-vpn edit <profile-name>"; return 1; fi
 
 	local id
 	id=$(resolve_profile_id "$name") || return 1
@@ -471,7 +471,7 @@ cmd_edit() {
 
 cmd_delete() {
 	local name=${1:-}
-	if [[ -z "$name" ]]; then error "Usage: eth-vpn delete <profile-name>"; return 1; fi
+	if [[ -z "$name" ]]; then error "Usage: ethz-vpn delete <profile-name>"; return 1; fi
 
 	local id
 	id=$(resolve_profile_id "$name") || return 1
@@ -501,7 +501,7 @@ cmd_delete() {
 
 cmd_default() {
 	local name=${1:-}
-	if [[ -z "$name" ]]; then error "Usage: eth-vpn default <profile-name>"; return 1; fi
+	if [[ -z "$name" ]]; then error "Usage: ethz-vpn default <profile-name>"; return 1; fi
 
 	local id
 	id=$(resolve_profile_id "$name") || return 1

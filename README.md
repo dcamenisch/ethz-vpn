@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.icon/Assets/network.badge.shield.half.filled@4x.png" width="128" alt="ETH VPN icon">
+</p>
+
 # ETH VPN
 
 Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with TOTP and Keychain integration. Supports multiple named profiles for different realms or accounts.
@@ -47,9 +51,9 @@ You can create as many profiles as you like (e.g. one for `student-net`, one for
 
 **In the CLI:**
 ```
-eth-vpn connect staff        Connect using the "staff" profile
-eth-vpn default student      Set "student" as the default
-eth-vpn profiles             List all profiles
+ethz-vpn connect staff        Connect using the "staff" profile
+ethz-vpn default student      Set "student" as the default
+ethz-vpn profiles             List all profiles
 ```
 
 ---
@@ -101,26 +105,26 @@ The app will fall back to the Homebrew binary automatically.
 
 ## CLI (`ethz-vpn.sh`)
 
-For terminal use, source or symlink `ethz-vpn.sh` as `eth-vpn`:
+For terminal use, symlink `ethz-vpn.sh` as `ethz-vpn`:
 
 ```bash
-ln -s "$(pwd)/ethz-vpn.sh" /usr/local/bin/eth-vpn
+ln -s "$(pwd)/ethz-vpn.sh" /usr/local/bin/ethz-vpn
 chmod +x ethz-vpn.sh
 ```
 
 ```
-eth-vpn connect [name]    Connect (optionally specify a profile name)
-eth-vpn disconnect        Disconnect
-eth-vpn status            Show connection status
-eth-vpn profiles          List all saved profiles
-eth-vpn add               Add a new profile interactively
-eth-vpn edit <name>       Edit an existing profile
-eth-vpn delete <name>     Delete a profile
-eth-vpn default <name>    Set the default profile
-eth-vpn --help            Show help
+ethz-vpn connect [name]    Connect (optionally specify a profile name)
+ethz-vpn disconnect        Disconnect
+ethz-vpn status            Show connection status
+ethz-vpn profiles          List all saved profiles
+ethz-vpn add               Add a new profile interactively
+ethz-vpn edit <name>       Edit an existing profile
+ethz-vpn delete <name>     Delete a profile
+ethz-vpn default <name>    Set the default profile
+ethz-vpn --help            Show help
 ```
 
-The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwordless operation. Run the app's **Manage Profiles** window first, or use `eth-vpn add` to configure via terminal.
+The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwordless operation. Run the app's **Manage Profiles** window first, or use `ethz-vpn add` to configure via terminal.
 
 ---
 
