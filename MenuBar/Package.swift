@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "ETHVPNMenuBar",
+    name: "ETHZVPNMenuBar",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "ETHVPNMenuBar",
-            path: "Sources/ETHVPNMenuBar",
+            name: "ETHZVPNMenuBar",
+            path: "Sources/ETHZVPNMenuBar",
             resources: [.copy("Resources")]
         )
     ]

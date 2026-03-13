@@ -58,7 +58,7 @@ Usage: ethz-vpn <command> [profile-name]
 
 Commands:
   connect [name]    Connect using a named profile (or the default profile)
-  disconnect|d      Disconnect active ETH VPN session
+  disconnect|d      Disconnect active ETHZ VPN session
   status|s          Show whether openconnect is running
   profiles          List all saved profiles
   add               Add a new profile interactively
@@ -193,7 +193,7 @@ json.dump(data, open(path, 'w'), indent=2)
 }
 
 get_active_profile_id() {
-	defaults read com.apple.ETHVPNMenuBar "${ACTIVE_PROFILE_KEY}" 2>/dev/null \
+	defaults read com.apple.ETHZVPNMenuBar "${ACTIVE_PROFILE_KEY}" 2>/dev/null \
 		|| _py "
 import json, os
 path = '${PROFILES_FILE}'
@@ -205,7 +205,7 @@ if data: print(data[0]['id'])
 
 set_active_profile_id() {
 	local id=$1
-	defaults write com.apple.ETHVPNMenuBar "${ACTIVE_PROFILE_KEY}" "$id" 2>/dev/null || true
+	defaults write com.apple.ETHZVPNMenuBar "${ACTIVE_PROFILE_KEY}" "$id" 2>/dev/null || true
 }
 
 resolve_profile_id() {
@@ -304,13 +304,13 @@ connect() {
 		--token-secret="sha1:base32:${TOKEN}" --no-external-auth "$VPN_HOST"; then
 		success 'VPN connected successfully.'
 		log_event "VPN connected for [${display}] ${USERNAME}@${REALM}.ethz.ch"
-		notify "ETH VPN" "Connected as ${USERNAME}@${REALM}.ethz.ch (${display})"
+		notify "ETHZ VPN" "Connected as ${USERNAME}@${REALM}.ethz.ch (${display})"
 		show_vpn_ip
 	else
 		local status=$?
 		error "Error: openconnect exited with status ${status}."
 		log_event "VPN connection failed (${status}) for [${display}] ${USERNAME}@${REALM}.ethz.ch"
-		notify "ETH VPN" "Connection failed (status ${status})"
+		notify "ETHZ VPN" "Connection failed (status ${status})"
 		return $status
 	fi
 }
@@ -327,11 +327,11 @@ disconnect() {
 		done
 		if openconnect_running; then
 			warn 'Warning: openconnect still running after SIGINT.'
-			notify "ETH VPN" "Disconnect may have failed — process still running"
+			notify "ETHZ VPN" "Disconnect may have failed — process still running"
 		else
 			success 'VPN disconnected successfully.'
 			log_event "VPN disconnected successfully"
-			notify "ETH VPN" "Disconnected"
+			notify "ETHZ VPN" "Disconnected"
 		fi
 	else
 		info 'No openconnect process found.'

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="icon.icon/Assets/network.badge.shield.half.filled@4x.png" width="128" alt="ETH VPN icon">
+  <img src="icon.icon/Assets/network.badge.shield.half.filled@4x.png" width="128" alt="ETHZ VPN icon">
 </p>
 
-# ETH VPN
+# ETHZ VPN
 
 Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with TOTP and Keychain integration. Supports multiple named profiles for different realms or accounts.
 
@@ -14,7 +14,7 @@ Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with
 
 | Component | Description |
 |-----------|-------------|
-| `ETH VPN.app` | Menu bar app — left-click for menu, right-click to toggle VPN |
+| `ETHZ VPN.app` | Menu bar app — left-click for menu, right-click to toggle VPN |
 | `ethz-vpn.sh` | CLI wrapper for terminal use |
 
 Both share the same Keychain entries and profile store, so setup done in the app works in the shell and vice versa.
@@ -23,7 +23,7 @@ Both share the same Keychain entries and profile store, so setup done in the app
 
 ## Quick start (end user)
 
-1. Download `ETH VPN.zip`, unzip, move `ETH VPN.app` anywhere (e.g. `/Applications`)
+1. Download `ETHZ VPN.zip`, unzip, move `ETHZ VPN.app` anywhere (e.g. `/Applications`)
 2. Double-click the app
 3. The **Manage Profiles** window opens automatically on first launch
 4. Click **Add Profile** and fill in:
@@ -72,10 +72,10 @@ brew install openconnect dylibbundler
 |--------|-------------|
 | `make fetch-openconnect` | Copy installed openconnect + all dylibs into `Resources/` (run once after `brew install openconnect`) |
 | `make build` | Compile the Swift app (`swift build -c release`) |
-| `make bundle` | Assemble `ETH VPN.app` in `~/Applications` |
+| `make bundle` | Assemble `ETHZ VPN.app` in `~/Applications` |
 | `make install` | Same as `bundle` — copies app to `~/Applications` (no sudoers written) |
-| `make dist` | Build and zip to `dist/ETH VPN.zip` for distribution |
-| `make uninstall` | Remove `~/Applications/ETH VPN.app` and `/etc/sudoers.d/eth-vpn` |
+| `make dist` | Build and zip to `dist/ETHZ VPN.zip` for distribution |
+| `make uninstall` | Remove `~/Applications/ETHZ VPN.app` and `/etc/sudoers.d/ethz-vpn` |
 | `make clean` | Remove Swift build artifacts |
 
 ### Build and distribute
@@ -86,7 +86,7 @@ make fetch-openconnect
 
 # Build and produce a distributable zip
 make dist
-# → dist/ETH VPN.zip
+# → dist/ETHZ VPN.zip
 ```
 
 The zip can be sent to anyone. No Homebrew required on the recipient's machine.
@@ -137,7 +137,7 @@ The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwo
 | Profile list | `~/.local/share/ethz-vpn-connect/profiles.json` |
 | Active profile ID | `UserDefaults` (`com.apple.ETHVPNMenuBar`) |
 
-The sudoers rule is written to `/etc/sudoers.d/eth-vpn` and allows the current user to run openconnect and `pkill` without a password.
+The sudoers rule is written to `/etc/sudoers.d/ethz-vpn` and allows the current user to run openconnect and `pkill` without a password.
 
 ---
 
@@ -157,7 +157,7 @@ Or manually:
 
 ```bash
 rm -rf ~/Applications/ETH\ VPN.app
-sudo rm -f /etc/sudoers.d/eth-vpn
+sudo rm -f /etc/sudoers.d/ethz-vpn
 # Remove Keychain entries for each profile (replace <id> with your profile id)
 security delete-generic-password -a "$USER" -s eth-vpn-password-<id>
 security delete-generic-password -a "$USER" -s eth-vpn-token-<id>

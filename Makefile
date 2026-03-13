@@ -1,9 +1,9 @@
-APP_NAME   = ETH VPN
+APP_NAME   = ETHZ VPN
 APP_BUNDLE = $(HOME)/Applications/$(APP_NAME).app
-BINARY     = ETHVPNMenuBar
+BINARY     = ETHZVPNMenuBar
 PKG_PATH   = MenuBar
 BUILD_DIR  = $(PKG_PATH)/.build/release
-RESOURCES_DIR = $(PKG_PATH)/Sources/ETHVPNMenuBar/Resources
+RESOURCES_DIR = $(PKG_PATH)/Sources/ETHZVPNMenuBar/Resources
 
 OPENCONNECT_BREW_PATH ?= $(shell command -v openconnect 2>/dev/null || echo /opt/homebrew/bin/openconnect)
 
@@ -54,8 +54,8 @@ install: bundle
 
 dist: bundle
 	mkdir -p dist
-	ditto -c -k --keepParent "$(APP_BUNDLE)" "dist/ETH VPN.zip"
-	@echo "Created dist/ETH VPN.zip"
+	ditto -c -k --keepParent "$(APP_BUNDLE)" "dist/ETHZ VPN.zip"
+	@echo "Created dist/ETHZ VPN.zip"
 
 uninstall:
 	rm -rf "$(APP_BUNDLE)"

@@ -3,19 +3,19 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.dcamenisch.eth-vpn-menubar</string>
+    <string>com.dcamenisch.ethz-vpn-menubar</string>
     <key>CFBundleName</key>
-    <string>ETH VPN</string>
+    <string>ETHZ VPN</string>
     <key>CFBundleDisplayName</key>
-    <string>ETH VPN</string>
+    <string>ETHZ VPN</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2</string>
+    <string>1.3</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>ETHVPNMenuBar</string>
+    <string>ETHZVPNMenuBar</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSUIElement</key>
@@ -25,6 +25,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>ETH VPN needs to install a privilege helper so it can connect without a password prompt each time.</string>
+    <string>ETHZ VPN needs to install a privilege helper so it can connect without a password prompt each time.</string>
 </dict>
 </plist>

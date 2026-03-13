@@ -69,7 +69,7 @@ final class VPNController {
         // Write token config to a temp file (mode 0600) so the secret never
         // appears in the process argument list (visible via `ps aux`).
         let configPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("eth-vpn-\(UUID().uuidString).conf").path
+            .appendingPathComponent("ethz-vpn-\(UUID().uuidString).conf").path
         let configContent = "token-mode=totp\ntoken-secret=sha1:base32:\(token)\n"
         let configData = configContent.data(using: .utf8)!
         FileManager.default.createFile(atPath: configPath, contents: configData,
@@ -276,5 +276,5 @@ final class VPNController {
 import Darwin
 
 extension Notification.Name {
-    static let vpnSecretsNotFound = Notification.Name("com.dcamenisch.eth-vpn.secretsNotFound")
+    static let vpnSecretsNotFound = Notification.Name("com.dcamenisch.ethz-vpn.secretsNotFound")
 }

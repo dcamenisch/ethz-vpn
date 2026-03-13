@@ -20,7 +20,7 @@ final class SetupWindowController {
         let view = ProfilesView(onDone: { [weak self] in self?.finish() })
         let hc = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: hc)
-        win.title = "ETH VPN — Profiles"
+        win.title = "ETHZ VPN — Profiles"
         win.styleMask = [.titled, .closable]
         win.isReleasedWhenClosed = false
         let delegate = WindowCloseDelegate { [weak self] in self?.finish() }

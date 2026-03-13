@@ -16,7 +16,7 @@ struct ProfilesView: View {
                 Image(systemName: "shield.fill")
                     .font(.system(size: 36))
                     .foregroundStyle(.tint)
-                Text("ETH VPN — Profiles")
+                Text("ETHZ VPN — Profiles")
                     .font(.title2.bold())
                 Text("Manage your VPN configurations.")
                     .font(.subheadline)

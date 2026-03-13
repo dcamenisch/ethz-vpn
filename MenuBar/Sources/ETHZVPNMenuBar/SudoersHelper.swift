@@ -2,7 +2,7 @@ import Foundation
 
 enum SudoersHelper {
     static func isInstalled(openconnectPath: String) -> Bool {
-        guard let contents = try? String(contentsOfFile: "/etc/sudoers.d/eth-vpn", encoding: .utf8) else { return false }
+        guard let contents = try? String(contentsOfFile: "/etc/sudoers.d/ethz-vpn", encoding: .utf8) else { return false }
         let realPath = URL(fileURLWithPath: openconnectPath).resolvingSymlinksInPath().path
         let escapedPath = realPath.replacingOccurrences(of: " ", with: #"\ "#)
         return contents.contains(escapedPath)
@@ -17,7 +17,7 @@ enum SudoersHelper {
         let rule = "\(user) ALL=(ALL) NOPASSWD: \(escapedPath)\n\(user) ALL=(ALL) NOPASSWD: /usr/bin/pkill\n"
 
         // Write rule to a temp file from Swift (avoids shell quoting issues with special chars)
-        let tmpPath = "/tmp/eth-vpn-sudoers.tmp"
+        let tmpPath = "/tmp/ethz-vpn-sudoers.tmp"
         let ruleData = rule.data(using: .utf8)!
         guard FileManager.default.createFile(atPath: tmpPath, contents: ruleData,
                                              attributes: [.posixPermissions: 0o600]) else {
@@ -28,7 +28,7 @@ enum SudoersHelper {
 
         // Use AppleScript only for the privileged part: validate + move + chmod
         let script = """
-        do shell script "/usr/sbin/visudo -cf \(tmpPath) && mv \(tmpPath) /etc/sudoers.d/eth-vpn && chmod 440 /etc/sudoers.d/eth-vpn" with administrator privileges
+        do shell script "/usr/sbin/visudo -cf \(tmpPath) && mv \(tmpPath) /etc/sudoers.d/ethz-vpn && chmod 440 /etc/sudoers.d/ethz-vpn" with administrator privileges
         """
 
         let process = Process()
