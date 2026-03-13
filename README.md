@@ -11,7 +11,7 @@ Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with
 | Component | Description |
 |-----------|-------------|
 | `ETH VPN.app` | Menu bar app — click to connect/disconnect |
-| `vpn.sh` | CLI wrapper for terminal use |
+| `ethz-vpn.sh` | CLI wrapper for terminal use |
 
 Both share the same Keychain entries and profile store, so setup done in the app works in the shell and vice versa.
 
@@ -98,13 +98,13 @@ The app will fall back to the Homebrew binary automatically.
 
 ---
 
-## CLI (`vpn.sh`)
+## CLI (`ethz-vpn.sh`)
 
-For terminal use, source or symlink `vpn.sh` as `eth-vpn`:
+For terminal use, source or symlink `ethz-vpn.sh` as `eth-vpn`:
 
 ```bash
-ln -s "$(pwd)/vpn.sh" /usr/local/bin/eth-vpn
-chmod +x vpn.sh
+ln -s "$(pwd)/ethz-vpn.sh" /usr/local/bin/eth-vpn
+chmod +x ethz-vpn.sh
 ```
 
 ```
