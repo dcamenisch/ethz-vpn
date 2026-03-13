@@ -10,7 +10,7 @@ Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with
 
 | Component | Description |
 |-----------|-------------|
-| `ETH VPN.app` | Menu bar app — click to connect/disconnect |
+| `ETH VPN.app` | Menu bar app — left-click for menu, right-click to toggle VPN |
 | `ethz-vpn.sh` | CLI wrapper for terminal use |
 
 Both share the same Keychain entries and profile store, so setup done in the app works in the shell and vice versa.
@@ -40,9 +40,10 @@ Subsequent launches skip the wizard automatically.
 You can create as many profiles as you like (e.g. one for `student-net`, one for `staff-net`).
 
 **In the menu bar app:**
-- Open **Manage Profiles...** to add, edit, delete, or set a default profile
+- Open **Manage Profiles...** to add, edit, duplicate, delete, or set a default profile
 - When you have more than one profile, the **Connect** menu expands into a submenu listing all profiles
 - The active (last-used) profile is shown with a checkmark
+- **Right-click** the menu bar icon to instantly connect (default profile) or disconnect
 
 **In the CLI:**
 ```
