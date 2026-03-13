@@ -10,7 +10,7 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     var tokenService:   String { "eth-vpn-token-\(id)" }
 }
 
-final class ProfileStore {
+@Observable final class ProfileStore {
     static let shared = ProfileStore()
 
     private let storeURL: URL = {
@@ -24,7 +24,7 @@ final class ProfileStore {
 
     private(set) var profiles: [VPNProfile] = []
 
-    var activeProfileID: String? {
+    @ObservationIgnored var activeProfileID: String? {
         get { UserDefaults.standard.string(forKey: activeProfileIDKey) }
         set { UserDefaults.standard.set(newValue, forKey: activeProfileIDKey) }
     }
