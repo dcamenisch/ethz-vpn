@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install openconnect dylibbundler
+
+      - name: Bundle openconnect dylibs
+        run: make fetch-openconnect
+
+      - name: Build and package
+        run: make dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ETH VPN.zip
+          generate_release_notes: true
