@@ -33,6 +33,7 @@ bundle: build
 	mkdir -p "$(APP_BUNDLE)/Contents/Resources"
 	cp "$(BUILD_DIR)/$(BINARY)" "$(APP_BUNDLE)/Contents/MacOS/$(BINARY)"
 	cp Info.plist "$(APP_BUNDLE)/Contents/Info.plist"
+	cp AppIcon.icns "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
 	@# Copy bundled openconnect + dylibs from the SPM build output (SPM copies Resources/)
 	@if [ -d "$(BUILD_DIR)/$(BINARY)_$(BINARY).resources/Resources" ]; then \
 		cp -R "$(BUILD_DIR)/$(BINARY)_$(BINARY).resources/Resources" "$(APP_BUNDLE)/Contents/Resources/"; \
