@@ -5,6 +5,7 @@ import SwiftUI
 struct ProfilesView: View {
     @State private var store = ProfileStore.shared
     @State private var editingProfile: VPNProfile? = nil
+    @State private var duplicatingProfile: VPNProfile? = nil
     @State private var isAdding = false
     let onDone: () -> Void
 
@@ -38,6 +39,7 @@ struct ProfilesView: View {
                             profile: profile,
                             isActive: store.activeProfileID == profile.id,
                             onEdit: { editingProfile = profile },
+                            onDuplicate: { duplicatingProfile = profile },
                             onDelete: { store.delete(profile) },
                             onSetActive: { store.activeProfileID = profile.id }
                         )
@@ -61,6 +63,9 @@ struct ProfilesView: View {
         .sheet(item: $editingProfile) { profile in
             ProfileEditView(profile: profile, onDone: { editingProfile = nil })
         }
+        .sheet(item: $duplicatingProfile) { profile in
+            ProfileEditView(profile: profile, isDuplicate: true, onDone: { duplicatingProfile = nil })
+        }
         .sheet(isPresented: $isAdding) {
             ProfileEditView(profile: nil, onDone: { isAdding = false })
         }
@@ -73,6 +78,7 @@ private struct ProfileRow: View {
     let profile: VPNProfile
     let isActive: Bool
     let onEdit: () -> Void
+    let onDuplicate: () -> Void
     let onDelete: () -> Void
     let onSetActive: () -> Void
 
@@ -102,11 +108,17 @@ private struct ProfileRow: View {
                     .foregroundStyle(.tint)
                     .font(.caption)
             }
+            Button(action: onDuplicate) {
+                Image(systemName: "doc.on.doc")
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 8)
+            .help("Duplicate profile")
             Button(action: onEdit) {
                 Image(systemName: "pencil")
             }
             .buttonStyle(.plain)
-            .padding(.leading, 8)
+            .padding(.leading, 4)
             Button(action: onDelete) {
                 Image(systemName: "trash")
                     .foregroundStyle(.red)
@@ -121,26 +133,24 @@ private struct ProfileRow: View {
 // MARK: - Add / Edit sheet
 
 struct ProfileEditView: View {
-    // nil means "new profile"
-    let existingProfile: VPNProfile?
     let onDone: () -> Void
-
     @State private var vm: ProfileEditViewModel
 
-    init(profile: VPNProfile?, onDone: @escaping () -> Void) {
-        self.existingProfile = profile
+    /// - Parameters:
+    ///   - profile: nil → new, non-nil → edit (or duplicate when isDuplicate=true)
+    ///   - isDuplicate: when true, copies data from profile but generates a fresh id
+    init(profile: VPNProfile?, isDuplicate: Bool = false, onDone: @escaping () -> Void) {
         self.onDone = onDone
-        _vm = State(initialValue: ProfileEditViewModel(profile: profile))
+        _vm = State(initialValue: ProfileEditViewModel(profile: profile, isDuplicate: isDuplicate))
     }
 
     var body: some View {
-        ProfileEditFormView(vm: vm, isNew: existingProfile == nil, onDone: onDone)
+        ProfileEditFormView(vm: vm, onDone: onDone)
     }
 }
 
 struct ProfileEditFormView: View {
     @Bindable var vm: ProfileEditViewModel
-    let isNew: Bool
     let onDone: () -> Void
 
     private enum Field: Hashable { case name, username, password, otp, realm }
@@ -148,7 +158,7 @@ struct ProfileEditFormView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Text(isNew ? "Add Profile" : "Edit Profile")
+            Text(vm.title)
                 .font(.title3.bold())
 
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 12) {
@@ -256,7 +266,9 @@ struct ProfileEditFormView: View {
     var isSaving = false
     var errorMessage: String? = nil
 
+    // nil = new profile; non-nil = editing existing id
     private let profileID: String?
+    let title: String
 
     var canSave: Bool { !isSaving }
     var statusMessage: (text: String, isError: Bool)? {
@@ -265,13 +277,21 @@ struct ProfileEditFormView: View {
         return nil
     }
 
-    init(profile: VPNProfile?) {
-        profileID    = profile?.id
-        displayName  = profile?.displayName ?? ""
-        username     = profile?.username ?? ""
-        realm        = profile?.realm ?? "student-net"
+    init(profile: VPNProfile?, isDuplicate: Bool = false) {
+        if isDuplicate {
+            // New profile — no existing id, but pre-fill fields and suggest a new name
+            profileID   = nil
+            displayName = profile.map { "\($0.displayName) Copy" } ?? ""
+            title       = "Duplicate Profile"
+        } else {
+            profileID   = profile?.id
+            displayName = profile?.displayName ?? ""
+            title       = profile == nil ? "Add Profile" : "Edit Profile"
+        }
+        username  = profile?.username ?? ""
+        realm     = profile?.realm ?? "student-net"
         if let p = profile {
-            password = ProfileStore.shared.password(for: p) ?? ""
+            password  = ProfileStore.shared.password(for: p) ?? ""
             otpSecret = ProfileStore.shared.token(for: p) ?? ""
         } else {
             password  = ""
