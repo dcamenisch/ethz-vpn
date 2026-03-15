@@ -54,8 +54,12 @@ install: bundle
 
 dist: bundle
 	mkdir -p dist
-	ditto -c -k --keepParent "$(APP_BUNDLE)" "dist/ETHZ VPN.zip"
-	@echo "Created dist/ETHZ VPN.zip"
+	@# Ad-hoc codesign all binaries and the app bundle
+	codesign --force --deep -s - "$(APP_BUNDLE)"
+	@# Create DMG
+	hdiutil create -volname "$(APP_NAME)" -srcfolder "$(APP_BUNDLE)" \
+		-ov -format UDZO "dist/ETHZ VPN.dmg"
+	@echo "Created dist/ETHZ VPN.dmg"
 
 uninstall:
 	rm -rf "$(APP_BUNDLE)"

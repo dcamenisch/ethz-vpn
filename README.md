@@ -23,21 +23,17 @@ Both share the same Keychain entries and profile store, so setup done in the app
 
 ## Quick start (end user)
 
-1. Download `ETHZ VPN.zip`, unzip, move `ETHZ VPN.app` anywhere (e.g. `/Applications`)
-2. Remove the macOS quarantine flag (required because the app is not code-signed):
-   ```bash
-   xattr -cr "/Applications/ETHZ VPN.app"
-   ```
-3. Double-click the app
-4. The **Manage Profiles** window opens automatically on first launch
-5. Click **Add Profile** and fill in:
+1. Download `ETHZ VPN.dmg`, open it, and drag `ETHZ VPN.app` to `/Applications`
+2. Double-click the app
+3. The **Manage Profiles** window opens automatically on first launch
+4. Click **Add Profile** and fill in:
    - **Name** — a label for this config (e.g. `Student`, `Staff`)
    - **Username** — your ETH username without `@ethz.ch`
    - **WLAN Password** — your ETH network password
    - **OTP Secret** — the base32 TOTP secret from your authenticator setup
    - **Realm** — leave as `student-net` unless you have a different group
-6. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
-7. Use the menu bar icon to connect and disconnect
+5. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
+6. Use the menu bar icon to connect and disconnect
 
 Subsequent launches skip the wizard automatically.
 
@@ -78,7 +74,7 @@ brew install openconnect dylibbundler
 | `make build` | Compile the Swift app (`swift build -c release`) |
 | `make bundle` | Assemble `ETHZ VPN.app` in `~/Applications` |
 | `make install` | Same as `bundle` — copies app to `~/Applications` (no sudoers written) |
-| `make dist` | Build and zip to `dist/ETHZ VPN.zip` for distribution |
+| `make dist` | Build, codesign, and package to `dist/ETHZ VPN.dmg` for distribution |
 | `make uninstall` | Remove `~/Applications/ETHZ VPN.app` and `/etc/sudoers.d/ethz-vpn` |
 | `make clean` | Remove Swift build artifacts |
 
@@ -88,12 +84,12 @@ brew install openconnect dylibbundler
 # First time only — bundle openconnect into the app resources
 make fetch-openconnect
 
-# Build and produce a distributable zip
+# Build and produce a distributable DMG
 make dist
-# → dist/ETHZ VPN.zip
+# → dist/ETHZ VPN.dmg
 ```
 
-The zip can be sent to anyone. No Homebrew required on the recipient's machine.
+The DMG can be sent to anyone. No Homebrew required on the recipient's machine.
 
 ### Developer-only build (no bundled openconnect)
 
