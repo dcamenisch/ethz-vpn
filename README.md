@@ -24,16 +24,20 @@ Both share the same Keychain entries and profile store, so setup done in the app
 ## Quick start (end user)
 
 1. Download `ETHZ VPN.zip`, unzip, move `ETHZ VPN.app` anywhere (e.g. `/Applications`)
-2. Double-click the app
-3. The **Manage Profiles** window opens automatically on first launch
-4. Click **Add Profile** and fill in:
+2. Remove the macOS quarantine flag (required because the app is not code-signed):
+   ```bash
+   xattr -cr "/Applications/ETHZ VPN.app"
+   ```
+3. Double-click the app
+4. The **Manage Profiles** window opens automatically on first launch
+5. Click **Add Profile** and fill in:
    - **Name** — a label for this config (e.g. `Student`, `Staff`)
    - **Username** — your ETH username without `@ethz.ch`
    - **WLAN Password** — your ETH network password
    - **OTP Secret** — the base32 TOTP secret from your authenticator setup
    - **Realm** — leave as `student-net` unless you have a different group
-5. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
-6. Use the menu bar icon to connect and disconnect
+6. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
+7. Use the menu bar icon to connect and disconnect
 
 Subsequent launches skip the wizard automatically.
 
