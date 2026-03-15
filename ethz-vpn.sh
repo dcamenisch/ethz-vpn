@@ -7,7 +7,7 @@ readonly SECRETS_DIR="${HOME}/.local/share/ethz-vpn-connect"
 readonly PROFILES_FILE="${SECRETS_DIR}/profiles.json"
 readonly ACTIVE_PROFILE_KEY="eth-vpn-active-profile-id"
 readonly LOGGER_TAG="eth-vpn"
-readonly VPN_HOST="sslvpn.ethz.ch"
+readonly DEFAULT_SERVER="sslvpn.ethz.ch"
 readonly DEFAULT_REALM="student-net"
 
 PASSWORD=""
@@ -163,7 +163,7 @@ profiles_save() {
 }
 
 profile_upsert() {
-	local id=$1 display=$2 username=$3 realm=$4
+	local id=$1 display=$2 username=$3 realm=$4 server=${5:-$DEFAULT_SERVER}
 	_py "
 import json, os
 path = '${PROFILES_FILE}'
@@ -171,11 +171,11 @@ data = json.load(open(path)) if os.path.exists(path) else []
 found = False
 for p in data:
     if p['id'] == '${id}':
-        p.update({'displayName': '${display}', 'username': '${username}', 'realm': '${realm}'})
+        p.update({'displayName': '${display}', 'username': '${username}', 'realm': '${realm}', 'server': '${server}'})
         found = True
         break
 if not found:
-    data.append({'id': '${id}', 'displayName': '${display}', 'username': '${username}', 'realm': '${realm}'})
+    data.append({'id': '${id}', 'displayName': '${display}', 'username': '${username}', 'realm': '${realm}', 'server': '${server}'})
 json.dump(data, open(path, 'w'), indent=2)
 "
 }
@@ -270,10 +270,12 @@ connect() {
 	local id
 	id=$(resolve_profile_id "$profile_name") || return 1
 
-	local USERNAME REALM
+	local USERNAME REALM SERVER
 	USERNAME=$(profile_get_field "$id" "username")
 	REALM=$(profile_get_field "$id" "realm")
 	REALM=${REALM:-$DEFAULT_REALM}
+	SERVER=$(profile_get_field "$id" "server")
+	SERVER=${SERVER:-$DEFAULT_SERVER}
 	require_non_empty "Username" "$USERNAME"
 
 	if ! PASSWORD=$(keychain_get "eth-vpn-password-${id}"); then
@@ -301,7 +303,7 @@ connect() {
 
 	if printf '%s\n' "$PASSWORD" | sudo openconnect -b -u "${USERNAME}@${REALM}.ethz.ch" -g "$REALM" \
 		--useragent=AnyConnect --passwd-on-stdin --token-mode=totp \
-		--token-secret="sha1:base32:${TOKEN}" --no-external-auth "$VPN_HOST"; then
+		--token-secret="sha1:base32:${TOKEN}" --no-external-auth "$SERVER"; then
 		success 'VPN connected successfully.'
 		log_event "VPN connected for [${display}] ${USERNAME}@${REALM}.ethz.ch"
 		notify "ETHZ VPN" "Connected as ${USERNAME}@${REALM}.ethz.ch (${display})"
@@ -407,8 +409,13 @@ cmd_add() {
 	realm=${realm//[[:space:]]/}
 	require_non_empty "Realm" "$realm"
 
+	local server
+	read -rp $'VPN server [sslvpn.ethz.ch]: ' server
+	server=${server:-$DEFAULT_SERVER}
+	server=${server//[[:space:]]/}
+
 	mkdir -p "$SECRETS_DIR"
-	profile_upsert "$id" "$display" "$username" "$realm"
+	profile_upsert "$id" "$display" "$username" "$realm" "$server"
 	keychain_set "eth-vpn-password-${id}" "$password"
 	keychain_set "eth-vpn-token-${id}" "$otp"
 
@@ -429,15 +436,17 @@ cmd_edit() {
 	local id
 	id=$(resolve_profile_id "$name") || return 1
 
-	local cur_display cur_username cur_realm
+	local cur_display cur_username cur_realm cur_server
 	cur_display=$(profile_get_field "$id" "displayName")
 	cur_username=$(profile_get_field "$id" "username")
 	cur_realm=$(profile_get_field "$id" "realm")
+	cur_server=$(profile_get_field "$id" "server")
+	cur_server=${cur_server:-$DEFAULT_SERVER}
 
 	info "Editing profile \"${cur_display}\". Press Enter to keep current value."
 	echo
 
-	local display username realm password otp
+	local display username realm server password otp
 
 	read -rp $"Profile name [${cur_display}]: " display
 	display=${display:-$cur_display}
@@ -463,7 +472,11 @@ cmd_edit() {
 	realm=${realm//[[:space:]]/}
 	require_non_empty "Realm" "$realm"
 
-	profile_upsert "$id" "$display" "$username" "$realm"
+	read -rp $"VPN server [${cur_server}]: " server
+	server=${server:-$cur_server}
+	server=${server//[[:space:]]/}
+
+	profile_upsert "$id" "$display" "$username" "$realm" "$server"
 	keychain_set "eth-vpn-password-${id}" "$password"
 	keychain_set "eth-vpn-token-${id}" "$otp"
 	success "Profile \"${display}\" updated."

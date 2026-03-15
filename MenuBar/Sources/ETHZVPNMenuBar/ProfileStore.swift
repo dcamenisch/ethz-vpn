@@ -5,6 +5,25 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     var displayName: String
     var username: String
     var realm: String
+    var server: String
+
+    /// Backward-compatible decoder: older profiles without `server` default to sslvpn.ethz.ch
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id          = try c.decode(String.self, forKey: .id)
+        displayName = try c.decode(String.self, forKey: .displayName)
+        username    = try c.decode(String.self, forKey: .username)
+        realm       = try c.decode(String.self, forKey: .realm)
+        server      = try c.decodeIfPresent(String.self, forKey: .server) ?? AppConstants.defaultServer
+    }
+
+    init(id: String, displayName: String, username: String, realm: String, server: String = AppConstants.defaultServer) {
+        self.id = id
+        self.displayName = displayName
+        self.username = username
+        self.realm = realm
+        self.server = server
+    }
 
     var passwordService: String { "eth-vpn-password-\(id)" }
     var tokenService:   String { "eth-vpn-token-\(id)" }

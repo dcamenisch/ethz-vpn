@@ -17,6 +17,7 @@ enum VPNState {
 enum AppConstants {
     static let appName        = "ETH VPN"
     static let defaultRealm   = "student-net"
+    static let defaultServer  = "sslvpn.ethz.ch"
 }
 
 final class VPNController {
@@ -55,6 +56,7 @@ final class VPNController {
         }
         let username = target.username
         let realm    = target.realm
+        let server   = target.server
         guard !username.isEmpty else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
             return
@@ -88,7 +90,7 @@ final class VPNController {
             "--passwd-on-stdin",
             "--config", configPath,
             "--no-external-auth",
-            "sslvpn.ethz.ch"
+            server
         ]
 
         let stdinPipe = Pipe()
