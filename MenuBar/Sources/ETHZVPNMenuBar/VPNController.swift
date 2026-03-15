@@ -55,7 +55,7 @@ final class VPNController {
         }
         let username = target.username
         let realm    = target.realm
-        let subnet   = target.subnet.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subnet   = target.subnet
          guard !username.isEmpty else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
             return

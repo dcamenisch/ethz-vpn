@@ -110,7 +110,7 @@ struct VPNProfile: Codable, Identifiable, Equatable {
             .flatMap { $0.isEmpty ? nil : $0 } ?? AppConstants.defaultRealm
 
         // Migrate Keychain entries to new keys
-          let profile = VPNProfile(id: "default", displayName: "Default", username: username, realm: realm, subnet: "")
+        let profile = VPNProfile(id: "default", displayName: "Default", username: username, realm: realm, subnet: "")
         if let pw  = KeychainHelper.get(service: "eth-vpn-password") { _ = KeychainHelper.set(service: profile.passwordService, value: pw) }
         if let tok = KeychainHelper.get(service: "eth-vpn-token")    { _ = KeychainHelper.set(service: profile.tokenService,    value: tok) }
         return profile
