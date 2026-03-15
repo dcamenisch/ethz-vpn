@@ -55,13 +55,17 @@ final class VPNController {
         }
         let username = target.username
         let realm    = target.realm
-        guard !username.isEmpty else {
+        let subnet   = target.subnet.trimmingCharacters(in: .whitespacesAndNewlines)
+         guard !username.isEmpty else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
             return
         }
         // Remember this as the active profile
-        store.activeProfileID = target.id
+        // Construct the target URL: sslvpn.ethz.ch[/subnet]
+        let baseUrl = "sslvpn.ethz.ch"
+        let fullUrl = subnet.isEmpty ? baseUrl : "\(baseUrl)/\(subnet)"
 
+        store.activeProfileID = target.id
         setState(.connecting)
 
         let openconnectPath = bundledOpenconnectPath()
@@ -88,7 +92,7 @@ final class VPNController {
             "--passwd-on-stdin",
             "--config", configPath,
             "--no-external-auth",
-            "sslvpn.ethz.ch"
+            fullUrl
         ]
 
         let stdinPipe = Pipe()

@@ -153,7 +153,7 @@ struct ProfileEditFormView: View {
     @Bindable var vm: ProfileEditViewModel
     let onDone: () -> Void
 
-    private enum Field: Hashable { case name, username, password, otp, realm }
+    private enum Field: Hashable { case name, username, password, otp, realm, subnet }
     @FocusState private var focus: Field?
 
     var body: some View {
@@ -222,6 +222,12 @@ struct ProfileEditFormView: View {
                         .focused($focus, equals: .realm)
                         .textFieldStyle(.roundedBorder)
                 }
+                GridRow {
+                    Text("Subnet").gridColumnAlignment(.trailing)
+                    TextField("optional", text: $vm.subnet)
+                        .focused($focus, equals: .subnet)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
 
             if let status = vm.statusMessage {
@@ -261,6 +267,7 @@ struct ProfileEditFormView: View {
     var password: String
     var otpSecret: String
     var realm: String
+    var subnet: String
     var showPassword = false
     var showOTP = false
     var isSaving = false
@@ -290,6 +297,7 @@ struct ProfileEditFormView: View {
         }
         username  = profile?.username ?? ""
         realm     = profile?.realm ?? AppConstants.defaultRealm
+        subnet    = profile?.subnet ?? ""
         if let p = profile {
             password  = ProfileStore.shared.password(for: p) ?? ""
             otpSecret = ProfileStore.shared.token(for: p) ?? ""
@@ -305,6 +313,7 @@ struct ProfileEditFormView: View {
         let trimOTP      = otpSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimRealm    = realm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? AppConstants.defaultRealm
                            : realm.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimSubnet   = subnet.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimName.isEmpty     else { errorMessage = "Name is required.";     return }
         guard !trimUsername.isEmpty else { errorMessage = "Username is required."; return }
@@ -312,7 +321,7 @@ struct ProfileEditFormView: View {
         guard !trimOTP.isEmpty      else { errorMessage = "OTP Secret is required."; return }
 
         let id = profileID ?? trimName.lowercased().replacingOccurrences(of: " ", with: "-")
-        let profile = VPNProfile(id: id, displayName: trimName, username: trimUsername, realm: trimRealm)
+        let profile = VPNProfile(id: id, displayName: trimName, username: trimUsername, realm: trimRealm, subnet: trimSubnet)
 
         isSaving = true
         ProfileStore.shared.upsert(profile, password: password, token: trimOTP)
