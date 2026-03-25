@@ -2,10 +2,15 @@ import Foundation
 
 enum SudoersHelper {
     static func isInstalled(openconnectPath: String) -> Bool {
-        guard let contents = try? String(contentsOfFile: "/etc/sudoers.d/ethz-vpn", encoding: .utf8) else { return false }
+        let filePath = "/etc/sudoers.d/ethz-vpn"
+        guard let contents = try? String(contentsOfFile: filePath, encoding: .utf8) else { return false }
         let realPath = URL(fileURLWithPath: openconnectPath).resolvingSymlinksInPath().path
         let escapedPath = realPath.replacingOccurrences(of: " ", with: #"\ "#)
-        return contents.contains(escapedPath)
+        guard contents.contains(escapedPath) else { return false }
+        // Also verify root ownership — macOS rejects sudoers files not owned by root
+        let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
+        let ownerID = attrs?[.ownerAccountID] as? Int
+        return ownerID == 0
     }
 
     static func installIfNeeded(openconnectPath: String, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -26,9 +31,10 @@ enum SudoersHelper {
             return
         }
 
-        // Use AppleScript only for the privileged part: validate + move + chmod
+        // Use AppleScript only for the privileged part: validate + move + chown + chmod
+        // chown root:wheel is required — macOS rejects sudoers files not owned by root
         let script = """
-        do shell script "/usr/sbin/visudo -cf \(tmpPath) && mv \(tmpPath) /etc/sudoers.d/ethz-vpn && chmod 440 /etc/sudoers.d/ethz-vpn" with administrator privileges
+        do shell script "/usr/sbin/visudo -cf \(tmpPath) && mv \(tmpPath) /etc/sudoers.d/ethz-vpn && chown root:wheel /etc/sudoers.d/ethz-vpn && chmod 440 /etc/sudoers.d/ethz-vpn" with administrator privileges
         """
 
         let process = Process()
