@@ -75,14 +75,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.action = #selector(statusItemClicked(_:))
             button.target = self
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            // Fire on both down and up for left/right so we catch the right-click
+            // regardless of which phase AppKit delivers for a status-item button.
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp, .rightMouseDown])
         }
         rebuildProfilesSubmenu()
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else { return }
-        if event.type == .rightMouseUp {
+        let event = NSApp.currentEvent
+        // A right-click on a status-item button can arrive as .rightMouseDown or
+        // .rightMouseUp depending on macOS version; a Control+left-click is the
+        // standard equivalent. Treat all of these as "right-click → toggle".
+        let isRightClick = event.map { e in
+            e.type == .rightMouseDown
+                || e.type == .rightMouseUp
+                || (e.type == .leftMouseUp && e.modifierFlags.contains(.control))
+        } ?? false
+
+        if isRightClick {
             VPNController.shared.toggleConnection()
         } else {
             // Left-click: show the menu
@@ -139,11 +150,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - First-run
 
+    private let firstRunDoneKey = "eth-vpn-did-complete-first-run"
+
     private func performFirstRunChecksIfNeeded() {
+        // Only guide the user through setup on the very first launch. After that
+        // the menu-bar icon just appears; setup stays reachable via "Manage
+        // Profiles…", and `connect()` still prompts if credentials are missing.
+        guard !UserDefaults.standard.bool(forKey: firstRunDoneKey) else { return }
+        UserDefaults.standard.set(true, forKey: firstRunDoneKey)
+
         let store = ProfileStore.shared
-        guard store.hasAnyCompleteProfile,
-              SudoersHelper.isInstalled(openconnectPath: VPNController.shared.resolvedOpenconnectPath())
-        else { openSetupWindow(); return }
+        let ready = store.hasAnyCompleteProfile
+            && SudoersHelper.isInstalled(openconnectPath: VPNController.shared.resolvedOpenconnectPath())
+        if !ready { openSetupWindow() }
     }
 
     @objc func showSetupTapped() {
