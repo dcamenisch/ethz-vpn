@@ -87,6 +87,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A right-click on a status-item button can arrive as .rightMouseDown or
         // .rightMouseUp depending on macOS version; a Control+left-click is the
         // standard equivalent. Treat all of these as "right-click → toggle".
+        //
+        // NOTE: On the macOS 27 dev beta the status-item button translates every
+        // right-click into a left-click before it reaches AppKit (NSApp.currentEvent
+        // and even a local event monitor both report .leftMouse*), so right-click
+        // toggle is inert there and a click just opens the menu. This detection is
+        // kept so it resumes working once that OS regression is fixed.
         let isRightClick = event.map { e in
             e.type == .rightMouseDown
                 || e.type == .rightMouseUp
