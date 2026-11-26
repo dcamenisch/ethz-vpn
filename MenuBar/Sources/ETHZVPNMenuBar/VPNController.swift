@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import os
 import UserNotifications
 
 enum VPNState {
@@ -36,6 +37,7 @@ final class VPNController {
     private var statusTimer: Timer?
     private var process: Process?
     private var pendingOutput = Data()
+    private static let logger = Logger(subsystem: "com.dcamenisch.ethz-vpn-menubar", category: "vpn")
     private static let connectTimeout: TimeInterval = 60
     private static let connectedMarkers = ["Configured as ", "Connected as ", "ESP session established", "DTLS connected"]
 
@@ -152,6 +154,7 @@ final class VPNController {
             pendingOutput.removeSubrange(...newline)
             guard !line.isEmpty else { continue }
             log.append(line)
+            Self.logger.info("\(line, privacy: .public)")
             if log.count > 300 { log.removeFirst(log.count - 300) }
             if case .connecting = state, Self.connectedMarkers.contains(where: line.contains) {
                 setState(.connected(ip: vpnIP() ?? ""))
@@ -175,6 +178,7 @@ final class VPNController {
     private func fail(_ message: String) {
         lastError = message
         log.append("Error: \(message)")
+        Self.logger.error("\(message, privacy: .public)")
         setState(.disconnected)
         postNotification(body: message)
         onError?(message)
