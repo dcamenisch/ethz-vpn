@@ -3,8 +3,8 @@ import Foundation
 import LocalAuthentication
 
 /// Encrypts profile secrets to a Secure Enclave key that can only be used after
-/// Touch ID or the account password. The Keychain holds only ciphertext, so
-/// reading a secret needs the user, not just access to the user's session.
+/// Touch ID or the account password. Only ciphertext and the enclave-wrapped key
+/// are stored on disk, so reading a secret needs the user, not just their session.
 enum SecretVault {
     enum VaultError: LocalizedError {
         case unavailable, corrupt
@@ -16,7 +16,7 @@ enum SecretVault {
         }
     }
 
-    private static let keyService = "eth-vpn-enclave-key"
+    private static let keyURL = ProfileStore.directory.appendingPathComponent("enclave-key")
     private static let info = Data("ethz-vpn secret".utf8)
 
     /// Asks for Touch ID (or the account password) once; the returned context
@@ -55,16 +55,15 @@ enum SecretVault {
 
     private static func enclaveKey(context: LAContext? = nil) throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {
         guard SecureEnclave.isAvailable else { throw VaultError.unavailable }
-        if let stored = KeychainHelper.get(service: keyService), let data = Data(base64Encoded: stored) {
+        if let data = try? Data(contentsOf: keyURL) {
             return try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: data, authenticationContext: context)
         }
         guard let access = SecAccessControlCreateWithFlags(
             nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, [.privateKeyUsage, .userPresence], nil)
         else { throw VaultError.unavailable }
         let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: access, authenticationContext: context)
-        guard KeychainHelper.set(service: keyService, value: key.dataRepresentation.base64EncodedString()) else {
-            throw VaultError.unavailable
-        }
+        try key.dataRepresentation.write(to: keyURL, options: .withoutOverwriting)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyURL.path)
         return key
     }
 }

@@ -60,7 +60,7 @@ struct ProfilesView: View {
                 if let profile = pendingDelete { store.delete(profile) }
             }
         } message: {
-            Text("The saved password and OTP secret are removed from the Keychain.")
+            Text("Its saved password and OTP secret are deleted.")
         }
     }
 
@@ -194,7 +194,7 @@ private struct SecretField: View {
     }
 
     func secretPrompt(_ placeholder: String) -> String {
-        source == nil ? placeholder : "Saved, leave blank to keep"
+        source?.isComplete == true ? "Saved, leave blank to keep" : placeholder
     }
 
     func save(completion: @escaping () -> Void) {
@@ -205,35 +205,25 @@ private struct SecretField: View {
         guard !user.isEmpty else { errorMessage = "Username is required."; return }
 
         let store = ProfileStore.shared
-        let newPassword = password.isEmpty ? nil : password
-        var newToken: String?
-        do {
-            newToken = trim(otpSecret).isEmpty ? nil : try OTPSecret.normalize(otpSecret)
-        } catch {
-            errorMessage = error.localizedDescription
-            return
-        }
-
-        if source == nil {
-            guard newPassword != nil else { errorMessage = "Password is required."; return }
-            guard newToken != nil else { errorMessage = "OTP secret is required."; return }
-        }
-
         let id = profileID ?? ProfileStore.makeID(from: name)
         if profileID == nil, store.profiles.contains(where: { $0.id == id }) {
             errorMessage = "A profile with this name already exists."
             return
         }
-        let profile = VPNProfile(id: id, displayName: name, username: user,
+        var profile = VPNProfile(id: id, displayName: name, username: user,
                                  realm: trim(realm).isEmpty ? AppConstants.defaultRealm : trim(realm),
-                                 server: trim(server).isEmpty ? AppConstants.defaultServer : trim(server))
+                                 server: trim(server).isEmpty ? AppConstants.defaultServer : trim(server),
+                                 sealedPassword: source?.sealedPassword, sealedToken: source?.sealedToken)
         do {
-            try store.upsert(profile, password: newPassword, token: newToken,
-                             copyingFrom: profileID == nil ? source : nil)
+            if !password.isEmpty { profile.sealedPassword = try SecretVault.seal(password) }
+            if !trim(otpSecret).isEmpty { profile.sealedToken = try SecretVault.seal(OTPSecret.normalize(otpSecret)) }
         } catch {
             errorMessage = error.localizedDescription
             return
         }
+        guard profile.sealedPassword != nil else { errorMessage = "Password is required."; return }
+        guard profile.sealedToken != nil else { errorMessage = "OTP secret is required."; return }
+        store.upsert(profile)
 
         guard !PrivilegedHelper.isInstalled() else { completion(); return }
         isSaving = true
