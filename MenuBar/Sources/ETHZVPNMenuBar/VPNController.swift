@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import Observation
 import os
 import UserNotifications
 
@@ -25,12 +26,13 @@ enum AppConstants {
     static let defaultServer = "sslvpn.ethz.ch"
 }
 
-final class VPNController {
+@Observable final class VPNController {
     static let shared = VPNController()
 
     private(set) var state: VPNState = .disconnected
     private(set) var lastError: String?
     private(set) var log: [String] = []
+    private(set) var connectedSince: Date?
     var onStateChange: ((VPNState) -> Void)?
     var onError: ((String) -> Void)?
 
@@ -42,7 +44,7 @@ final class VPNController {
     private static let connectedMarkers = ["Configured as ", "Connected as ", "ESP session established", "DTLS connected"]
 
     private init() {
-        if isOpenconnectRunning() { state = .connected(ip: vpnIP() ?? "") }
+        if isOpenconnectRunning() { state = .connected(ip: vpnIP() ?? ""); connectedSince = Date() }
         startPolling()
     }
 
@@ -221,6 +223,8 @@ final class VPNController {
     // MARK: - Helpers
 
     private func setState(_ newState: VPNState) {
+        if !newState.isConnected { connectedSince = nil }
+        else if !state.isConnected { connectedSince = Date() }
         state = newState
         onStateChange?(newState)
     }

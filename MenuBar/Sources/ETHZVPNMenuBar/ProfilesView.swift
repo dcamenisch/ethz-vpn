@@ -13,12 +13,12 @@ struct ProfilesView: View {
         VStack(spacing: 0) {
             // Header
             VStack(spacing: 4) {
-                Image(systemName: "shield.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.tint)
-                Text("ETHZ VPN — Profiles")
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 64, height: 64)
+                Text("ETHZ VPN")
                     .font(.title2.bold())
-                Text("Manage your VPN configurations.")
+                Text("Your saved VPN profiles")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -97,7 +97,7 @@ private struct ProfileRow: View {
                             .clipShape(Capsule())
                     }
                 }
-                Text("\(profile.username) · \(profile.realm)")
+                Text("\(profile.username)@\(profile.realm)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -180,40 +180,16 @@ struct ProfileEditFormView: View {
                 }
                 GridRow {
                     Text("WLAN Password").gridColumnAlignment(.trailing)
-                    HStack(spacing: 4) {
-                        Group {
-                            if vm.showPassword {
-                                TextField(vm.secretPlaceholder("Password"), text: $vm.password)
-                                    .focused($focus, equals: .password)
-                            } else {
-                                SecureField(vm.secretPlaceholder("Password"), text: $vm.password)
-                                    .focused($focus, equals: .password)
-                            }
-                        }
-                        .textFieldStyle(.roundedBorder)
-                        Button { vm.showPassword.toggle() } label: {
-                            Image(systemName: vm.showPassword ? "eye.slash" : "eye")
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
-                    }
+                    SecretField(placeholder: vm.secretPlaceholder("Password"), text: $vm.password)
+                        .focused($focus, equals: .password)
                 }
                 GridRow {
                     Text("OTP Secret").gridColumnAlignment(.trailing)
-                    HStack(spacing: 4) {
-                        Group {
-                            if vm.showOTP {
-                                TextField(vm.secretPlaceholder("Base32 key or otpauth:// link"), text: $vm.otpSecret)
-                                    .focused($focus, equals: .otp)
-                            } else {
-                                SecureField(vm.secretPlaceholder("Base32 key or otpauth:// link"), text: $vm.otpSecret)
-                                    .focused($focus, equals: .otp)
-                            }
-                        }
-                        .textFieldStyle(.roundedBorder)
-                        Button { vm.showOTP.toggle() } label: {
-                            Image(systemName: vm.showOTP ? "eye.slash" : "eye")
-                        }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        SecretField(placeholder: vm.secretPlaceholder("Key or otpauth:// link"), text: $vm.otpSecret)
+                            .focused($focus, equals: .otp)
+                        Text("The setup key from your authenticator enrollment")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 GridRow {
@@ -257,6 +233,23 @@ struct ProfileEditFormView: View {
     }
 }
 
+private struct SecretField: View {
+    let placeholder: String
+    @Binding var text: String
+    @State private var revealed = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Group {
+                if revealed { TextField(placeholder, text: $text) } else { SecureField(placeholder, text: $text) }
+            }
+            .textFieldStyle(.roundedBorder)
+            Button { revealed.toggle() } label: { Image(systemName: revealed ? "eye.slash" : "eye") }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - ViewModel
 
 @Observable final class ProfileEditViewModel {
@@ -266,8 +259,6 @@ struct ProfileEditFormView: View {
     var otpSecret: String
     var realm: String
     var server: String
-    var showPassword = false
-    var showOTP = false
     var isSaving = false
     var errorMessage: String? = nil
 
@@ -279,12 +270,12 @@ struct ProfileEditFormView: View {
     var canSave: Bool { !isSaving }
     var statusMessage: (text: String, isError: Bool)? {
         if let err = errorMessage { return (err, true) }
-        if isSaving { return ("Saving...", false) }
+        if isSaving { return ("Saving", false) }
         return nil
     }
 
     func secretPlaceholder(_ base: String) -> String {
-        secretsSource == nil ? base : "Saved — leave blank to keep"
+        secretsSource == nil ? base : "Saved, leave blank to keep"
     }
 
     init(profile: VPNProfile?, isDuplicate: Bool = false) {

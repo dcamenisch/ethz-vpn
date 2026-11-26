@@ -1,339 +1,175 @@
 import AppKit
 import Network
 import ServiceManagement
+import SwiftUI
 import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
-    private var menu: NSMenu!
-
-    private var statusMenuItem: NSMenuItem!
-    private var connectMenuItem: NSMenuItem!        // shown when disconnected, no profiles
-    private var profilesConnectMenuItem: NSMenuItem! // submenu when profiles exist
-    private var disconnectMenuItem: NSMenuItem!
-    private var launchAtLoginMenuItem: NSMenuItem!
-    private var requireAuthMenuItem: NSMenuItem!
-    private var autoConnectMenuItem: NSMenuItem!
+    private let menu = NSMenu()
+    private var setupWindowController: SetupWindowController?
     private var networkMonitor: NWPathMonitor?
-    private let autoConnectKey = "eth-vpn-auto-connect"
+    private var pulseTimer: Timer?
 
-    var setupWindowController: SetupWindowController?
+    private let autoConnectKey = "eth-vpn-auto-connect"
+    private let firstRunDoneKey = "eth-vpn-did-complete-first-run"
+    private var vpn: VPNController { .shared }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        buildMenu()  // calls rebuildProfilesSubmenu() at end
-        setupVPNController()
-        performFirstRunChecksIfNeeded()
-        autoConnectIfNeeded()
-        updateUI(for: VPNController.shared.state)  // icon + labels only
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(showSetupTapped),
-            name: .vpnSecretsNotFound,
-            object: nil
-        )
-    }
+        menu.delegate = self
+        // No statusItem.menu: clicks are handled manually so right-click can toggle.
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp, .rightMouseDown])
 
-    // MARK: - Menu construction
+        vpn.onStateChange = { [weak self] _ in DispatchQueue.main.async { self?.updateIcon() } }
+        vpn.onError = { [weak self] message in self?.showConnectionError(message) }
+        NotificationCenter.default.addObserver(self, selector: #selector(openProfiles), name: .vpnSecretsNotFound, object: nil)
 
-    private func buildMenu() {
-        menu = NSMenu()
-
-        statusMenuItem = NSMenuItem(title: "Checking...", action: nil, keyEquivalent: "")
-        statusMenuItem.isEnabled = false
-        menu.addItem(statusMenuItem)
-
-        menu.addItem(.separator())
-
-        // Simple "Connect" — shown when only one profile or no profiles yet
-        connectMenuItem = NSMenuItem(title: "Connect", action: #selector(connectDefaultTapped), keyEquivalent: "")
-        connectMenuItem.target = self
-        menu.addItem(connectMenuItem)
-
-        // "Connect ▶" submenu — shown when multiple profiles exist
-        profilesConnectMenuItem = NSMenuItem(title: "Connect", action: nil, keyEquivalent: "")
-        profilesConnectMenuItem.submenu = NSMenu()
-        menu.addItem(profilesConnectMenuItem)
-
-        disconnectMenuItem = NSMenuItem(title: "Disconnect", action: #selector(disconnectTapped), keyEquivalent: "")
-        disconnectMenuItem.target = self
-        menu.addItem(disconnectMenuItem)
-
-        menu.addItem(.separator())
-
-        let copyLog = NSMenuItem(title: "Copy Connection Log", action: #selector(copyLogTapped), keyEquivalent: "")
-        copyLog.target = self
-        menu.addItem(copyLog)
-
-        let manageProfiles = NSMenuItem(title: "Manage Profiles...", action: #selector(showSetupTapped), keyEquivalent: "")
-        manageProfiles.target = self
-        menu.addItem(manageProfiles)
-
-        requireAuthMenuItem = NSMenuItem(title: "Require Touch ID to Connect", action: #selector(toggleRequireAuth), keyEquivalent: "")
-        requireAuthMenuItem.target = self
-        requireAuthMenuItem.state = Authenticator.isRequired ? .on : .off
-        menu.addItem(requireAuthMenuItem)
-
-        autoConnectMenuItem = NSMenuItem(title: "Connect at Launch", action: #selector(toggleAutoConnect), keyEquivalent: "")
-        autoConnectMenuItem.target = self
-        autoConnectMenuItem.state = UserDefaults.standard.bool(forKey: autoConnectKey) ? .on : .off
-        menu.addItem(autoConnectMenuItem)
-
-        launchAtLoginMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        launchAtLoginMenuItem.target = self
-        launchAtLoginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(launchAtLoginMenuItem)
-
-        menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(quit)
-
-        // Do NOT assign statusItem.menu — that would suppress custom click handling.
-        // Instead, handle clicks manually so right-click can toggle the VPN.
-        if let button = statusItem.button {
-            button.action = #selector(statusItemClicked(_:))
-            button.target = self
-            // Fire on both down and up for left/right so we catch the right-click
-            // regardless of which phase AppKit delivers for a status-item button.
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp, .rightMouseDown])
-        }
-        rebuildProfilesSubmenu()
-    }
-
-    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-        let event = NSApp.currentEvent
-        // A right-click on a status-item button can arrive as .rightMouseDown or
-        // .rightMouseUp depending on macOS version; a Control+left-click is the
-        // standard equivalent. Treat all of these as "right-click → toggle".
-        //
-        // NOTE: On the macOS 27 dev beta the status-item button translates every
-        // right-click into a left-click before it reaches AppKit (NSApp.currentEvent
-        // and even a local event monitor both report .leftMouse*), so right-click
-        // toggle is inert there and a click just opens the menu. This detection is
-        // kept so it resumes working once that OS regression is fixed.
-        let isRightClick = event.map { e in
-            e.type == .rightMouseDown
-                || e.type == .rightMouseUp
-                || (e.type == .leftMouseUp && e.modifierFlags.contains(.control))
-        } ?? false
-
-        if isRightClick {
-            VPNController.shared.toggleConnection()
-        } else {
-            // Left-click: show the menu
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil  // remove again so right-click still works next time
-        }
-    }
-
-    private func rebuildProfilesSubmenu() {
-        let store = ProfileStore.shared
-        let profiles = store.profiles
-        let submenu = profilesConnectMenuItem.submenu!
-        submenu.removeAllItems()
-
-        for profile in profiles {
-            let item = NSMenuItem(title: profile.displayName, action: #selector(connectProfileTapped(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = profile.id
-            if store.activeProfileID == profile.id {
-                item.state = .on
-            }
-            submenu.addItem(item)
-        }
-
-        if profiles.count > 1 {
-            connectMenuItem.isHidden = true
-            profilesConnectMenuItem.isHidden = false
-        } else {
-            // 0 or 1 profile: use simple item
-            connectMenuItem.isHidden = false
-            profilesConnectMenuItem.isHidden = true
-            if let only = profiles.first {
-                connectMenuItem.title = "Connect (\(only.displayName))"
-            } else {
-                connectMenuItem.title = "Connect"
-            }
-        }
-    }
-
-    // MARK: - VPN wiring
-
-    private func setupVPNController() {
-        VPNController.shared.onStateChange = { [weak self] state in
-            DispatchQueue.main.async { self?.updateUI(for: state) }
-        }
-        VPNController.shared.onError = { [weak self] message in
-            self?.showConnectionError(message)
-        }
-    }
-
-    private func showConnectionError(_ message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Could not connect to the ETH VPN"
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Manage Profiles…")
-        alert.addButton(withTitle: "Copy Log")
-        NSApp.activate(ignoringOtherApps: true)
-        switch alert.runModal() {
-        case .alertSecondButtonReturn: openSetupWindow()
-        case .alertThirdButtonReturn:  copyLogTapped()
-        default: break
-        }
-    }
-
-    @objc private func copyLogTapped() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(VPNController.shared.log.joined(separator: "\n"), forType: .string)
+        updateIcon()
+        runFirstLaunchSetup()
+        autoConnectIfEnabled()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if VPNController.shared.isOpenconnectRunning() {
-            VPNController.shared.disconnect()
+        if vpn.isOpenconnectRunning() { vpn.disconnect() }
+    }
+
+    // MARK: - Status item
+
+    @objc private func statusItemClicked() {
+        // macOS 27 beta delivers right-clicks on status items as left-clicks, so
+        // the toggle only works there with Control-click until that is fixed.
+        let isRightClick = NSApp.currentEvent.map {
+            $0.type == .rightMouseDown || $0.type == .rightMouseUp
+                || ($0.type == .leftMouseUp && $0.modifierFlags.contains(.control))
+        } ?? false
+
+        if isRightClick {
+            vpn.toggleConnection()
+        } else {
+            statusItem.menu = menu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil
         }
     }
 
-    // MARK: - First-run
-
-    private let firstRunDoneKey = "eth-vpn-did-complete-first-run"
-
-    private func performFirstRunChecksIfNeeded() {
-        // Only guide the user through setup on the very first launch. After that
-        // the menu-bar icon just appears; setup stays reachable via "Manage
-        // Profiles…", and `connect()` still prompts if credentials are missing.
-        guard !UserDefaults.standard.bool(forKey: firstRunDoneKey) else { return }
-        UserDefaults.standard.set(true, forKey: firstRunDoneKey)
-
-        let store = ProfileStore.shared
-        let ready = store.hasAnyCompleteProfile && PrivilegedHelper.isInstalled()
-        if !ready { openSetupWindow() }
+    private func updateIcon() {
+        guard let button = statusItem.button else { return }
+        let style = StatusStyle.current
+        button.image = StatusBadge.image(style)
+        pulseTimer?.invalidate()
+        pulseTimer = nil
+        button.alphaValue = style == .disconnected ? 0.75 : 1
+        if style == .connecting {
+            pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak button] _ in
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.5
+                    button?.animator().alphaValue = (button?.alphaValue ?? 1) > 0.7 ? 0.45 : 1
+                }
+            }
+        }
     }
 
-    @objc func showSetupTapped() {
-        openSetupWindow()
+    // MARK: - Menu (rebuilt each time it opens)
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let card = NSHostingView(rootView: StatusCard())
+        card.frame.size = card.fittingSize
+        let cardItem = NSMenuItem()
+        cardItem.view = card
+        menu.addItem(cardItem)
+        menu.addItem(.separator())
+
+        let profiles = ProfileStore.shared.profiles
+        let activeID = ProfileStore.shared.activeProfile?.id
+        let idle = { if case .disconnected = self.vpn.state { return true }; return false }()
+
+        if vpn.state.isConnected {
+            menu.addItem(item("Disconnect", #selector(disconnect), symbol: "xmark.shield"))
+        } else if profiles.count > 1 {
+            let connect = item("Connect", nil, symbol: "checkmark.shield")
+            connect.submenu = NSMenu()
+            for profile in profiles {
+                let entry = item(profile.displayName, #selector(connectProfile(_:)))
+                entry.representedObject = profile.id
+                entry.state = profile.id == activeID ? .on : .off
+                entry.isEnabled = idle
+                connect.submenu?.addItem(entry)
+            }
+            connect.isEnabled = idle
+            menu.addItem(connect)
+        } else {
+            let title = profiles.first.map { "Connect \($0.displayName)" } ?? "Connect"
+            let connect = item(title, idle ? #selector(connectDefault) : nil, symbol: "checkmark.shield")
+            menu.addItem(connect)
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(item("Manage Profiles", #selector(openProfiles), symbol: "person.crop.circle"))
+        menu.addItem(item("Copy Connection Log", #selector(copyLog), symbol: "doc.on.clipboard"))
+        menu.addItem(.separator())
+        menu.addItem(toggle("Require Touch ID", Authenticator.isRequired, #selector(toggleRequireAuth)))
+        menu.addItem(toggle("Connect at Launch", UserDefaults.standard.bool(forKey: autoConnectKey), #selector(toggleAutoConnect)))
+        menu.addItem(toggle("Launch at Login", SMAppService.mainApp.status == .enabled, #selector(toggleLaunchAtLogin)))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit ETHZ VPN", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
-    private func openSetupWindow() {
+    private func item(_ title: String, _ action: Selector?, symbol: String? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+        return item
+    }
+
+    private func toggle(_ title: String, _ isOn: Bool, _ action: Selector) -> NSMenuItem {
+        let item = item(title, action)
+        item.state = isOn ? .on : .off
+        return item
+    }
+
+    // MARK: - Actions
+
+    @objc private func connectDefault() { vpn.connect() }
+    @objc private func disconnect() { vpn.disconnect() }
+
+    @objc private func connectProfile(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let profile = ProfileStore.shared.profiles.first(where: { $0.id == id }) else { return }
+        vpn.connect(profile: profile)
+    }
+
+    @objc private func copyLog() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(vpn.log.joined(separator: "\n"), forType: .string)
+    }
+
+    @objc private func openProfiles() {
         if setupWindowController == nil {
             setupWindowController = SetupWindowController()
             setupWindowController?.onComplete = { [weak self] in
                 self?.setupWindowController = nil
-                self?.rebuildProfilesSubmenu()
-                self?.updateUI(for: VPNController.shared.state)
+                self?.updateIcon()
             }
         }
         setupWindowController?.showPanel()
     }
 
-    // MARK: - UI
-
-    private func updateUI(for state: VPNState) {
-        switch state {
-        case .connected(let ip):
-            setIcon(.connected)
-            let label = ip.isEmpty ? "Connected" : "Connected — \(ip)"
-            if let active = ProfileStore.shared.activeProfile {
-                statusMenuItem.title = "● \(label) (\(active.displayName))"
-            } else {
-                statusMenuItem.title = "● \(label)"
-            }
-        case .connecting:
-            setIcon(.transitioning)
-            statusMenuItem.title = "Connecting..."
-        case .disconnecting:
-            setIcon(.transitioning)
-            statusMenuItem.title = "Disconnecting..."
-        case .disconnected:
-            setIcon(VPNController.shared.lastError == nil ? .disconnected : .failed)
-            if let error = VPNController.shared.lastError {
-                statusMenuItem.title = "⚠ " + (error.count > 60 ? error.prefix(57) + "…" : error)
-                statusMenuItem.toolTip = error
-            } else {
-                statusMenuItem.title = "○ Disconnected"
-                statusMenuItem.toolTip = nil
-            }
-        }
-
-        connectMenuItem.isEnabled = !state.isConnected && !state.isTransitioning
-        profilesConnectMenuItem.isEnabled = !state.isConnected && !state.isTransitioning
-        disconnectMenuItem.isHidden = !state.isConnected
-    }
-
-    private enum IconStyle { case connected, transitioning, disconnected, failed }
-    private var blinkTimer: Timer?
-
-    private func setIcon(_ style: IconStyle) {
-        guard let button = statusItem.button else { return }
-        let symbol = style == .failed ? "exclamationmark.shield" : "network.badge.shield.half.filled"
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: AppConstants.appName)
-        button.image?.isTemplate = true
-        button.appearsDisabled = style != .connected
-        blinkTimer?.invalidate()
-        blinkTimer = nil
-        if style == .transitioning {
-            blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak button] _ in
-                button?.appearsDisabled.toggle()
-            }
-        }
-    }
-
-    // MARK: - Actions
-
-    @objc private func connectDefaultTapped() {
-        VPNController.shared.connect()
-    }
-
-    @objc private func connectProfileTapped(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let profile = ProfileStore.shared.profiles.first(where: { $0.id == id })
-        else { return }
-        VPNController.shared.connect(profile: profile)
-    }
-
-    @objc private func disconnectTapped() {
-        VPNController.shared.disconnect()
-    }
-
     @objc private func toggleRequireAuth() {
-        guard Authenticator.isRequired else {
-            Authenticator.isRequired = true
-            requireAuthMenuItem.state = .on
-            return
-        }
-        Authenticator.authenticate(reason: "turn off Touch ID for VPN connections", force: true) { [weak self] ok, _ in
-            guard ok else { return }
-            Authenticator.isRequired = false
-            self?.requireAuthMenuItem.state = .off
+        guard Authenticator.isRequired else { Authenticator.isRequired = true; return }
+        Authenticator.authenticate(reason: "turn off Touch ID for VPN connections", force: true) { ok, _ in
+            if ok { Authenticator.isRequired = false }
         }
     }
 
     @objc private func toggleAutoConnect() {
-        let enabled = !UserDefaults.standard.bool(forKey: autoConnectKey)
-        UserDefaults.standard.set(enabled, forKey: autoConnectKey)
-        autoConnectMenuItem.state = enabled ? .on : .off
-    }
-
-    /// At login the network is often not up yet, so wait for it (up to 30s) before connecting.
-    private func autoConnectIfNeeded() {
-        guard UserDefaults.standard.bool(forKey: autoConnectKey),
-              ProfileStore.shared.hasAnyCompleteProfile,
-              !VPNController.shared.state.isConnected else { return }
-        let monitor = NWPathMonitor()
-        networkMonitor = monitor
-        let fire = { [weak self] in
-            guard let self, self.networkMonitor === monitor else { return }
-            monitor.cancel()
-            self.networkMonitor = nil
-            VPNController.shared.connect()
-        }
-        monitor.pathUpdateHandler = { path in if path.status == .satisfied { fire() } }
-        monitor.start(queue: .main)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: fire)
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: autoConnectKey), forKey: autoConnectKey)
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -341,13 +177,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             if service.status == .enabled { try service.unregister() } else { try service.register() }
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Could not change Launch at Login"
-            alert.informativeText = "\(error.localizedDescription)\n\nMake sure the app is in /Applications."
-            NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
+            showAlert("Could not change Launch at Login", "\(error.localizedDescription)\n\nMake sure the app is in /Applications.")
         }
         if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-        launchAtLoginMenuItem.state = service.status == .enabled ? .on : .off
+    }
+
+    // MARK: - Startup
+
+    private func runFirstLaunchSetup() {
+        guard !UserDefaults.standard.bool(forKey: firstRunDoneKey) else { return }
+        UserDefaults.standard.set(true, forKey: firstRunDoneKey)
+        if !ProfileStore.shared.hasAnyCompleteProfile || !PrivilegedHelper.isInstalled() { openProfiles() }
+    }
+
+    /// At login the network is often not up yet, so wait for it (up to 30s).
+    private func autoConnectIfEnabled() {
+        guard UserDefaults.standard.bool(forKey: autoConnectKey),
+              ProfileStore.shared.hasAnyCompleteProfile,
+              !vpn.state.isConnected else { return }
+        let monitor = NWPathMonitor()
+        networkMonitor = monitor
+        let fire = { [weak self] in
+            guard let self, self.networkMonitor === monitor else { return }
+            monitor.cancel()
+            self.networkMonitor = nil
+            self.vpn.connect()
+        }
+        monitor.pathUpdateHandler = { if $0.status == .satisfied { fire() } }
+        monitor.start(queue: .main)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: fire)
+    }
+
+    // MARK: - Alerts
+
+    private func showConnectionError(_ message: String) {
+        let choice = showAlert("Could not connect to ETHZ VPN", message, buttons: ["OK", "Manage Profiles", "Copy Log"])
+        if choice == .alertSecondButtonReturn { openProfiles() }
+        if choice == .alertThirdButtonReturn { copyLog() }
+    }
+
+    @discardableResult
+    private func showAlert(_ title: String, _ message: String, buttons: [String] = ["OK"]) -> NSApplication.ModalResponse {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        buttons.forEach { alert.addButton(withTitle: $0) }
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal()
     }
 }
