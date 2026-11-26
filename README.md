@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.icon/Assets/network.badge.shield.half.filled@4x.png" width="128" alt="ETHZ VPN icon">
+  <img src="docs/icon.png" width="128" alt="ETHZ VPN icon">
 </p>
 
 # ETHZ VPN
