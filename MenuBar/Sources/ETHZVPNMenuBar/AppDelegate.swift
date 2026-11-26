@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        let copyLog = NSMenuItem(title: "Copy Connection Log", action: #selector(copyLogTapped), keyEquivalent: "")
+        copyLog.target = self
+        menu.addItem(copyLog)
+
         let manageProfiles = NSMenuItem(title: "Manage Profiles...", action: #selector(showSetupTapped), keyEquivalent: "")
         manageProfiles.target = self
         menu.addItem(manageProfiles)
@@ -146,6 +150,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         VPNController.shared.onStateChange = { [weak self] state in
             DispatchQueue.main.async { self?.updateUI(for: state) }
         }
+        VPNController.shared.onError = { [weak self] message in
+            self?.showConnectionError(message)
+        }
+    }
+
+    private func showConnectionError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Could not connect to the ETH VPN"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Manage Profiles…")
+        alert.addButton(withTitle: "Copy Log")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertSecondButtonReturn: openSetupWindow()
+        case .alertThirdButtonReturn:  copyLogTapped()
+        default: break
+        }
+    }
+
+    @objc private func copyLogTapped() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(VPNController.shared.log.joined(separator: "\n"), forType: .string)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -206,7 +234,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusMenuItem.title = "Disconnecting..."
         case .disconnected:
             setIcon(systemName: "lock.open.fill")
-            statusMenuItem.title = "○ Disconnected"
+            if let error = VPNController.shared.lastError {
+                statusMenuItem.title = "⚠ " + (error.count > 60 ? error.prefix(57) + "…" : error)
+                statusMenuItem.toolTip = error
+            } else {
+                statusMenuItem.title = "○ Disconnected"
+                statusMenuItem.toolTip = nil
+            }
         }
 
         connectMenuItem.isEnabled = !state.isConnected && !state.isTransitioning
