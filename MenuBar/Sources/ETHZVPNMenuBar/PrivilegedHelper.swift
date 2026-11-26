@@ -69,8 +69,7 @@ enum PrivilegedHelper {
         guard let openconnect else { throw InstallError.missingComponent("openconnect") }
 
         let vpnc = bundledResource("vpnc-script")
-            ?? ["/opt/homebrew/etc/vpnc/vpnc-script", "/usr/local/etc/vpnc/vpnc-script",
-                "/opt/homebrew/etc/vpnc-script", "/usr/local/etc/vpnc-script"]
+            ?? ["/opt/homebrew/etc/vpnc/vpnc-script", "/usr/local/etc/vpnc/vpnc-script"]
                 .first { FileManager.default.fileExists(atPath: $0) }
         guard let vpnc else { throw InstallError.missingComponent("vpnc-script") }
 
@@ -132,14 +131,9 @@ enum PrivilegedHelper {
 
     // MARK: - Helpers
 
-    /// SPM may nest the resources folder as Contents/Resources/Resources.
     static func bundledResource(_ name: String) -> String? {
-        guard let base = Bundle.main.resourceURL else { return nil }
-        for candidate in [base.appendingPathComponent(name),
-                          base.appendingPathComponent("Resources").appendingPathComponent(name)] {
-            if FileManager.default.fileExists(atPath: candidate.path) { return candidate.path }
-        }
-        return nil
+        Bundle.main.resourceURL.map { $0.appendingPathComponent(name).path }
+            .flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
     }
 
     private static func sq(_ s: String) -> String {
