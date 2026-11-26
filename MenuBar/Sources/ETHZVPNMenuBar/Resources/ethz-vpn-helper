@@ -73,11 +73,10 @@ cmd_connect() {
 	[[ -n $password ]]          || die "no password given on stdin" "$EX_DATAERR"
 	[[ $token =~ $BASE32_RE ]]  || die "OTP secret is not valid base32" "$EX_DATAERR"
 
-	local workdir
-	workdir=$(mktemp -d /private/var/run/ethz-vpn.XXXXXX)
-	trap "rm -rf '$workdir'" EXIT
+	WORKDIR=$(mktemp -d /private/var/run/ethz-vpn.XXXXXX)
+	trap 'rm -rf "$WORKDIR"' EXIT
 	trap 'exit 130' INT TERM
-	printf 'token-mode=totp\ntoken-secret=sha1:base32:%s\n' "$token" >"$workdir/config"
+	printf 'token-mode=totp\ntoken-secret=sha1:base32:%s\n' "$token" >"$WORKDIR/config"
 	token=""
 
 	local -a args=(
@@ -86,7 +85,7 @@ cmd_connect() {
 		--no-external-auth
 		--non-inter
 		--passwd-on-stdin
-		--config "$workdir/config"
+		--config "$WORKDIR/config"
 		--script "$VPNC_SCRIPT"
 		-u "${username}@${realm}.ethz.ch"
 		-g "$realm"
@@ -102,8 +101,7 @@ cmd_connect() {
 cmd_disconnect() {
 	pgrep -x openconnect >/dev/null 2>&1 || exit 0
 	pkill -INT -x openconnect || true
-	local i
-	for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+	for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
 		pgrep -x openconnect >/dev/null 2>&1 || exit 0
 		sleep 0.5
 	done
