@@ -123,7 +123,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Manage Profiles", #selector(openProfiles), symbol: "person.crop.circle"))
         menu.addItem(item("Copy Connection Log", #selector(copyLog), symbol: "doc.on.clipboard"))
         menu.addItem(.separator())
-        menu.addItem(toggle("Require Touch ID", Authenticator.isRequired, #selector(toggleRequireAuth)))
         menu.addItem(toggle("Connect at Launch", UserDefaults.standard.bool(forKey: autoConnectKey), #selector(toggleAutoConnect)))
         menu.addItem(toggle("Launch at Login", SMAppService.mainApp.status == .enabled, #selector(toggleLaunchAtLogin)))
         menu.addItem(.separator())
@@ -168,13 +167,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         setupWindowController?.showPanel()
-    }
-
-    @objc private func toggleRequireAuth() {
-        guard Authenticator.isRequired else { Authenticator.isRequired = true; return }
-        Authenticator.authenticate(reason: "turn off Touch ID for VPN connections", force: true) { ok, _ in
-            if ok { Authenticator.isRequired = false }
-        }
     }
 
     @objc private func toggleAutoConnect() {

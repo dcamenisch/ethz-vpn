@@ -1,29 +1,12 @@
 import Foundation
+import LocalAuthentication
 
 struct VPNProfile: Codable, Identifiable, Equatable {
     var id: String
     var displayName: String
     var username: String
     var realm: String
-    var server: String
-
-    /// Profiles saved before `server` existed default to sslvpn.ethz.ch.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id          = try c.decode(String.self, forKey: .id)
-        displayName = try c.decode(String.self, forKey: .displayName)
-        username    = try c.decode(String.self, forKey: .username)
-        realm       = try c.decode(String.self, forKey: .realm)
-        server      = try c.decodeIfPresent(String.self, forKey: .server) ?? AppConstants.defaultServer
-    }
-
-    init(id: String, displayName: String, username: String, realm: String, server: String = AppConstants.defaultServer) {
-        self.id = id
-        self.displayName = displayName
-        self.username = username
-        self.realm = realm
-        self.server = server
-    }
+    var server = AppConstants.defaultServer
 
     var passwordService: String { "eth-vpn-password-\(id)" }
     var tokenService:   String { "eth-vpn-token-\(id)" }
@@ -79,16 +62,21 @@ struct VPNProfile: Codable, Identifiable, Equatable {
         var errorDescription: String? { "Could not save the credentials to the Keychain." }
     }
 
-    /// `nil` secrets keep the values already in the Keychain.
-    func upsert(_ profile: VPNProfile, password: String?, token: String?) throws {
-        if let password, !KeychainHelper.set(service: profile.passwordService, value: password) { throw KeychainError() }
-        if let token, !KeychainHelper.set(service: profile.tokenService, value: token) { throw KeychainError() }
+    /// Seals new secrets; `nil` keeps the saved ones, or copies them from `source` when duplicating.
+    func upsert(_ profile: VPNProfile, password: String?, token: String?, copyingFrom source: VPNProfile? = nil) throws {
+        try storeSecret(password, service: profile.passwordService, fallback: source?.passwordService)
+        try storeSecret(token, service: profile.tokenService, fallback: source?.tokenService)
         if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[idx] = profile
         } else {
             profiles.append(profile)
         }
         save()
+    }
+
+    private func storeSecret(_ secret: String?, service: String, fallback: String?) throws {
+        let value = try secret.map(SecretVault.seal) ?? fallback.flatMap(KeychainHelper.get)
+        if let value, !KeychainHelper.set(service: service, value: value) { throw KeychainError() }
     }
 
     func delete(_ profile: VPNProfile) {
@@ -101,12 +89,13 @@ struct VPNProfile: Codable, Identifiable, Equatable {
 
     // MARK: - Credential accessors
 
-    func password(for profile: VPNProfile) -> String? {
-        KeychainHelper.get(service: profile.passwordService)
-    }
-
-    func token(for profile: VPNProfile) -> String? {
-        KeychainHelper.get(service: profile.tokenService)
+    /// Needs a context authenticated with `SecretVault.authenticate`.
+    func secrets(for profile: VPNProfile, context: LAContext) throws -> (password: String, token: String)? {
+        func read(_ service: String) throws -> String? {
+            try KeychainHelper.get(service: service).map { try SecretVault.open($0, context: context) }
+        }
+        guard let password = try read(profile.passwordService), let token = try read(profile.tokenService) else { return nil }
+        return (password, token)
     }
 
     func isComplete(profile: VPNProfile) -> Bool {

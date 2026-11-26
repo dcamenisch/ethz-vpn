@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import LocalAuthentication
 import Observation
 import os
 import UserNotifications
@@ -59,17 +60,23 @@ enum AppConstants {
         ProfileStore.shared.activeProfileID = target.id
         lastError = nil
         setState(.connecting)
-        Authenticator.authenticate(reason: "connect to the ETH VPN as \(target.username)") { [weak self] ok, error in
-            guard let self else { return }
-            if ok { self.start(target) }
-            else if let error { self.fail(error) }
-            else { self.setState(.disconnected) }
+        SecretVault.authenticate(reason: "connect to the ETH VPN as \(target.username)") { [weak self] result in
+            switch result {
+            case .success(let context): self?.start(target, context: context)
+            case .failure(let error as LAError) where [.userCancel, .appCancel, .systemCancel].contains(error.code):
+                self?.setState(.disconnected)
+            case .failure(let error): self?.fail(error.localizedDescription)
+            }
         }
     }
 
-    private func start(_ target: VPNProfile) {
-        let store = ProfileStore.shared
-        guard let password = store.password(for: target), let token = store.token(for: target) else {
+    private func start(_ target: VPNProfile, context: LAContext) {
+        let secrets: (password: String, token: String)?
+        do { secrets = try ProfileStore.shared.secrets(for: target, context: context) } catch {
+            fail(error.localizedDescription)
+            return
+        }
+        guard let (password, token) = secrets else {
             fail("No password or OTP secret is saved for “\(target.displayName)”. Edit the profile and enter them again.")
             return
         }

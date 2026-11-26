@@ -205,7 +205,7 @@ private struct SecretField: View {
         guard !user.isEmpty else { errorMessage = "Username is required."; return }
 
         let store = ProfileStore.shared
-        var newPassword = password.isEmpty ? nil : password
+        let newPassword = password.isEmpty ? nil : password
         var newToken: String?
         do {
             newToken = trim(otpSecret).isEmpty ? nil : try OTPSecret.normalize(otpSecret)
@@ -214,11 +214,7 @@ private struct SecretField: View {
             return
         }
 
-        if profileID == nil {
-            if let source {
-                newPassword = newPassword ?? store.password(for: source)
-                newToken = newToken ?? store.token(for: source)
-            }
+        if source == nil {
             guard newPassword != nil else { errorMessage = "Password is required."; return }
             guard newToken != nil else { errorMessage = "OTP secret is required."; return }
         }
@@ -232,7 +228,8 @@ private struct SecretField: View {
                                  realm: trim(realm).isEmpty ? AppConstants.defaultRealm : trim(realm),
                                  server: trim(server).isEmpty ? AppConstants.defaultServer : trim(server))
         do {
-            try store.upsert(profile, password: newPassword, token: newToken)
+            try store.upsert(profile, password: newPassword, token: newToken,
+                             copyingFrom: profileID == nil ? source : nil)
         } catch {
             errorMessage = error.localizedDescription
             return
