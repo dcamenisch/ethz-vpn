@@ -251,7 +251,7 @@ enum AppConstants {
         return nil
     }
 
-    func postNotification(body: String) {
+    private func postNotification(body: String) {
         let content = UNMutableNotificationContent()
         content.title = AppConstants.appName
         content.body = body

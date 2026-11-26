@@ -2,60 +2,37 @@ import Foundation
 import Security
 
 enum KeychainHelper {
-    static func get(service: String) -> String? {
-        let query: [CFString: Any] = [
+    private static func query(_ service: String, _ extra: [CFString: Any] = [:]) -> CFDictionary {
+        var q: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: NSUserName(),
-            kSecReturnData: true,
-            kSecMatchLimit: kSecMatchLimitOne
         ]
+        q.merge(extra) { $1 }
+        return q as CFDictionary
+    }
+
+    static func get(service: String) -> String? {
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        return value.trimmingCharacters(in: .newlines)
+        guard SecItemCopyMatching(query(service, [kSecReturnData: true]), &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
     }
 
     static func set(service: String, value: String) -> Bool {
-        let data = value.data(using: .utf8)!
-        // Try updating first
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: NSUserName()
-        ]
-        let attributes: [CFString: Any] = [kSecValueData: data]
-        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let data = Data(value.utf8)
+        let status = SecItemUpdate(query(service), [kSecValueData: data] as CFDictionary)
         if status == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData] = data
-            status = SecItemAdd(addQuery as CFDictionary, nil)
+            return SecItemAdd(query(service, [kSecValueData: data]), nil) == errSecSuccess
         }
         return status == errSecSuccess
     }
 
     static func exists(service: String) -> Bool {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: NSUserName(),
-            kSecMatchLimit: kSecMatchLimitOne
-        ]
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+        SecItemCopyMatching(query(service), nil) == errSecSuccess
     }
 
-    @discardableResult
-    static func delete(service: String) -> Bool {
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: NSUserName()
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound
+    static func delete(service: String) {
+        SecItemDelete(query(service))
     }
 }
