@@ -1,0 +1,9 @@
+This project is a fork of https://github.com/dcamenisch/ethz-vpn by
+Danny Camenisch. The upstream repository has no license, so code taken from it
+(up to commit a97ef2d) remains under its author's copyright.
+
+The MIT License in LICENSE applies to changes made in this fork by
+Lionnus Kesting from commit a97ef2d onward.
+
+This project is not affiliated with or endorsed by ETH Zurich. It bundles
+OpenConnect (LGPL-2.1) and vpnc-script (GPL-2.0), which keep their own licenses.
