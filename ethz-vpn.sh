@@ -6,6 +6,8 @@ IFS=$'\n\t'
 readonly SECRETS_DIR="${HOME}/.local/share/ethz-vpn-connect"
 readonly PROFILES_FILE="${SECRETS_DIR}/profiles.json"
 readonly ACTIVE_PROFILE_KEY="eth-vpn-active-profile-id"
+readonly DEFAULTS_DOMAIN="com.dcamenisch.ethz-vpn-menubar"
+readonly HELPER="/Library/PrivilegedHelperTools/ethz-vpn/ethz-vpn-helper"
 readonly LOGGER_TAG="eth-vpn"
 readonly DEFAULT_SERVER="sslvpn.ethz.ch"
 readonly DEFAULT_REALM="student-net"
@@ -42,7 +44,8 @@ error()   { printf "${RED}%s${RESET}\n"     "$*" >&2; }
 # ---------------------------------------------------------------------------
 notify() {
 	local title=$1 message=$2
-	osascript -e "display notification \"$message\" with title \"$title\"" 2>/dev/null || true
+	osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' \
+		"$title" "$message" >/dev/null 2>&1 || true
 }
 
 log_event() {
@@ -86,12 +89,9 @@ require_tool() {
 }
 
 ensure_prereqs() {
-	for tool in openconnect sudo security; do
+	for tool in sudo security python3; do
 		require_tool "$tool"
 	done
-	if ! sudo -n true >/dev/null 2>&1; then
-		info 'Info: sudo password may be requested during VPN operations.'
-	fi
 }
 
 require_non_empty() {
@@ -124,106 +124,86 @@ keychain_delete() {
 # Profile store (thin JSON parser using python3 / awk fallback)
 # ---------------------------------------------------------------------------
 
-# Requires python3 (available on every modern macOS).
-_py() { python3 -c "$1" 2>/dev/null; }
+# Values are passed to python3 as argv, never interpolated into code.
+_py() { local code=$1; shift; python3 -c "$code" "$PROFILES_FILE" "$@" 2>/dev/null; }
+
+readonly PY_LOAD='
+import json, os, sys
+path = sys.argv[1]
+data = json.load(open(path)) if os.path.exists(path) else []
+def save():
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: json.dump(data, f, indent=2)
+'
 
 profiles_list() {
-	if [[ ! -f "$PROFILES_FILE" ]]; then
-		echo ""
-		return
-	fi
-	_py "
-import json, sys
-data = json.load(open('${PROFILES_FILE}'))
-for p in data:
-    print(p['id'])
-"
+	_py "$PY_LOAD"'
+for p in data: print(p["id"])'
 }
 
 profile_get_field() {
-	local id=$1 field=$2
-	_py "
-import json
-data = json.load(open('${PROFILES_FILE}'))
+	_py "$PY_LOAD"'
 for p in data:
-    if p['id'] == '${id}':
-        print(p.get('${field}', ''))
-        break
-"
+    if p["id"] == sys.argv[2]:
+        print(p.get(sys.argv[3], "")); break' "$1" "$2"
 }
 
 profile_exists() {
-	local id=$1
-	[[ -n "$(profile_get_field "$id" "id")" ]]
-}
-
-profiles_save() {
-	# Called after a Python script that writes the file; nothing to do here.
-	:
+	[[ -n "$(profile_get_field "$1" "id")" ]]
 }
 
 profile_upsert() {
 	local id=$1 display=$2 username=$3 realm=$4 server=${5:-$DEFAULT_SERVER}
-	_py "
-import json, os
-path = '${PROFILES_FILE}'
-data = json.load(open(path)) if os.path.exists(path) else []
-found = False
+	_py "$PY_LOAD"'
+entry = dict(zip(["id", "displayName", "username", "realm", "server"], sys.argv[2:7]))
 for p in data:
-    if p['id'] == '${id}':
-        p.update({'displayName': '${display}', 'username': '${username}', 'realm': '${realm}', 'server': '${server}'})
-        found = True
-        break
-if not found:
-    data.append({'id': '${id}', 'displayName': '${display}', 'username': '${username}', 'realm': '${realm}', 'server': '${server}'})
-json.dump(data, open(path, 'w'), indent=2)
-"
+    if p["id"] == entry["id"]:
+        p.update(entry); break
+else:
+    data.append(entry)
+save()' "$id" "$display" "$username" "$realm" "$server"
 }
 
 profile_delete_entry() {
-	local id=$1
-	_py "
-import json, os
-path = '${PROFILES_FILE}'
-if not os.path.exists(path): exit(0)
-data = json.load(open(path))
-data = [p for p in data if p['id'] != '${id}']
-json.dump(data, open(path, 'w'), indent=2)
-"
+	_py "$PY_LOAD"'
+data[:] = [p for p in data if p["id"] != sys.argv[2]]
+save()' "$1"
 }
 
 get_active_profile_id() {
-	defaults read com.apple.ETHZVPNMenuBar "${ACTIVE_PROFILE_KEY}" 2>/dev/null \
-		|| _py "
-import json, os
-path = '${PROFILES_FILE}'
-if not os.path.exists(path): exit(1)
-data = json.load(open(path))
-if data: print(data[0]['id'])
-" 2>/dev/null || echo ""
+	defaults read "$DEFAULTS_DOMAIN" "$ACTIVE_PROFILE_KEY" 2>/dev/null || profiles_list | head -1
 }
 
 set_active_profile_id() {
-	local id=$1
-	defaults write com.apple.ETHZVPNMenuBar "${ACTIVE_PROFILE_KEY}" "$id" 2>/dev/null || true
+	defaults write "$DEFAULTS_DOMAIN" "$ACTIVE_PROFILE_KEY" "$1" 2>/dev/null || true
+}
+
+make_id() {
+	printf '%s' "$1" | tr '[:upper:] ' '[:lower:]-' | tr -cd 'a-z0-9_-'
+}
+
+# Accepts a base32 key (any case, spaces allowed) or an otpauth:// link.
+normalize_otp() {
+	python3 -c '
+import sys, urllib.parse
+raw = sys.argv[1].strip()
+if raw.lower().startswith("otpauth://"):
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
+    raw = q.get("secret", [""])[0]
+s = "".join(raw.split()).replace("-", "").upper()
+import re
+sys.exit(1) if not re.fullmatch(r"[A-Z2-7]+=*", s) else print(s)' "$1"
 }
 
 resolve_profile_id() {
 	local name=${1:-}
 	if [[ -n "$name" ]]; then
-		# Accept either id or displayName (case-insensitive)
 		local matched
-		matched=$(_py "
-import json, os
-path = '${PROFILES_FILE}'
-if not os.path.exists(path): exit(1)
-data = json.load(open(path))
-needle = '${name}'.lower()
+		matched=$(_py "$PY_LOAD"'
+needle = sys.argv[2].lower()
 for p in data:
-    if p['id'].lower() == needle or p['displayName'].lower() == needle:
-        print(p['id'])
-        break
-" 2>/dev/null || echo "")
+    if p["id"].lower() == needle or p["displayName"].lower() == needle:
+        print(p["id"]); break' "$name" || true)
 		if [[ -z "$matched" ]]; then
 			error "Error: No profile named \"${name}\" found."
 			return 1
@@ -232,8 +212,7 @@ for p in data:
 	else
 		local active
 		active=$(get_active_profile_id)
-		if [[ -z "$active" ]]; then
-			# Fall back to first profile
+		if [[ -z "$active" ]] || ! profile_exists "$active"; then
 			active=$(profiles_list | head -1)
 		fi
 		if [[ -z "$active" ]]; then
@@ -301,9 +280,12 @@ connect() {
 	log_event "Connecting [${display}] ${USERNAME}@${REALM}.ethz.ch"
 	set_active_profile_id "$id"
 
-	if printf '%s\n' "$PASSWORD" | sudo openconnect -b -u "${USERNAME}@${REALM}.ethz.ch" -g "$REALM" \
-		--useragent=AnyConnect --passwd-on-stdin --token-mode=totp \
-		--token-secret="sha1:base32:${TOKEN}" --no-external-auth "$SERVER"; then
+	if ! sudo -n "$HELPER" version >/dev/null 2>&1; then
+		error 'Error: The VPN helper is not installed. Open the ETHZ VPN app and save a profile to install it.'
+		return 1
+	fi
+
+	if printf '%s\n%s\n' "$PASSWORD" "$TOKEN" | sudo -n "$HELPER" connect-bg "$USERNAME" "$REALM" "$SERVER"; then
 		success 'VPN connected successfully.'
 		log_event "VPN connected for [${display}] ${USERNAME}@${REALM}.ethz.ch"
 		notify "ETHZ VPN" "Connected as ${USERNAME}@${REALM}.ethz.ch (${display})"
@@ -321,12 +303,7 @@ disconnect() {
 	require_tool sudo
 	if openconnect_running; then
 		log_event "Disconnecting openconnect"
-		sudo pkill -SIGINT -x openconnect >/dev/null 2>&1 || true
-		local i=0
-		while openconnect_running && (( i < 10 )); do
-			sleep 0.5
-			(( i++ )) || true
-		done
+		sudo -n "$HELPER" disconnect >/dev/null 2>&1 || true
 		if openconnect_running; then
 			warn 'Warning: openconnect still running after SIGINT.'
 			notify "ETHZ VPN" "Disconnect may have failed — process still running"
@@ -388,7 +365,8 @@ cmd_add() {
 	require_non_empty "Profile name" "$display"
 
 	local id
-	id=$(echo "$display" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+	id=$(make_id "$display")
+	require_non_empty "Profile id" "$id"
 	if profile_exists "$id"; then
 		error "Error: A profile with id \"${id}\" already exists. Use \"ethz-vpn edit ${id}\" to update it."
 		return 1
@@ -401,8 +379,8 @@ cmd_add() {
 	read -rsp $'ETHZ WLAN Password: ' password; echo
 	require_non_empty "Password" "$password"
 
-	read -rsp $'ETHZ OTP Secret: ' otp; echo
-	require_non_empty "OTP secret" "$otp"
+	read -rsp $'ETHZ OTP Secret (key or otpauth:// link): ' otp; echo
+	otp=$(normalize_otp "$otp") || { error "Error: OTP secret must be a base32 key or otpauth:// link."; return 1; }
 
 	read -rp $'VPN realm/group [student-net]: ' realm
 	realm=${realm:-$DEFAULT_REALM}
@@ -462,7 +440,9 @@ cmd_edit() {
 	require_non_empty "Password" "$password"
 
 	read -rsp $'ETHZ OTP Secret (leave blank to keep): ' otp; echo
-	if [[ -z "$otp" ]]; then
+	if [[ -n "$otp" ]]; then
+		otp=$(normalize_otp "$otp") || { error "Error: OTP secret must be a base32 key or otpauth:// link."; return 1; }
+	else
 		otp=$(keychain_get "eth-vpn-token-${id}" || echo "")
 	fi
 	require_non_empty "OTP secret" "$otp"
@@ -492,7 +472,7 @@ cmd_delete() {
 	display=$(profile_get_field "$id" "displayName")
 
 	read -rp $"Delete profile \"${display}\"? [y/N]: " confirm
-	if [[ "${confirm,,}" != "y" ]]; then
+	if [[ "$confirm" != [yY] ]]; then
 		info "Aborted."
 		return 0
 	fi
