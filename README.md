@@ -1,166 +1,97 @@
 <p align="center">
-  <img src="icon.icon/Assets/network.badge.shield.half.filled@4x.png" width="128" alt="ETHZ VPN icon">
+  <img src="docs/icon.png" width="128" alt="ETHZ VPN icon">
 </p>
 
-# ETHZ VPN
+<h1 align="center">ETHZ VPN</h1>
 
-Menu bar app and CLI for connecting to the ETH Zurich VPN using openconnect with TOTP and Keychain integration. Supports multiple named profiles for different realms or accounts.
+<p align="center">One click to the ETH Zurich VPN from the macOS menu bar, secured with Touch ID.</p>
 
-**Architecture:** Apple Silicon (arm64) only.
+ETHZ VPN wraps [OpenConnect](https://www.infradead.org/openconnect/) so you never have to type your password or a one-time code again. Your WLAN password and OTP secret are encrypted with a key in your Mac's Secure Enclave, the app generates the TOTP code itself, and only Touch ID unlocks them for a connection.
 
----
+Not affiliated with or endorsed by ETH Zurich.
 
-## What's included
+## Features
 
-| Component | Description |
-|-----------|-------------|
-| `ETHZ VPN.app` | Menu bar app — left-click for menu, right-click to toggle VPN |
-| `ethz-vpn.sh` | CLI wrapper for terminal use |
+- **Menu bar status.** An ETHZ badge that turns green when connected, plus a live status card with your VPN IP and connection time.
+- **Touch ID instead of typing codes.** Your secrets can only be decrypted after Touch ID (or your Mac password), so an unlocked Mac alone is not enough.
+- **Clear errors.** Failed logins, unreachable servers and setup problems show a readable message, and the full log can be copied from the menu.
+- **Profiles.** Separate profiles for `student-net`, `staff-net` or other realms. Right-click (or Control-click) the badge to toggle the default profile.
+- **Connect at login.** Combine *Launch at Login* and *Connect at Launch* to be on the VPN right after you log in.
+- **CLI.** `ethz-vpn connect` from the terminal, with the same profiles and Touch ID prompt.
 
-Both share the same Keychain entries and profile store, so setup done in the app works in the shell and vice versa.
+## Install
 
----
+1. Download `ETHZ VPN.dmg` from [Releases](https://github.com/lionnus/ethz-vpn/releases) and drag the app to `/Applications`.
+2. The app is not notarized, so remove the quarantine flag once:
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/ETHZ VPN.app"
+   ```
+3. Open the app. The profiles window appears on first launch.
 
-## Quick start (end user)
+## Setup
 
-1. Download `ETHZ VPN.dmg`, open it, and drag `ETHZ VPN.app` to `/Applications`
-2. Double-click the app
-3. The **Manage Profiles** window opens automatically on first launch
-4. Click **Add Profile** and fill in:
-   - **Name** — a label for this config (e.g. `Student`, `Staff`)
-   - **Username** — your ETH username without `@ethz.ch`
-   - **WLAN Password** — your ETH network password
-   - **OTP Secret** — the base32 TOTP secret from your authenticator setup
-   - **Realm** — leave as `student-net` unless you have a different group
-5. Click **Save** — you'll be prompted once for your Mac admin password to install the passwordless sudo rule
-6. Use the menu bar icon to connect and disconnect
+Add a profile with:
 
-Subsequent launches skip the wizard automatically.
+| Field | Value |
+|---|---|
+| Username | Your ETH username, without `@ethz.ch` |
+| WLAN Password | Your ETH network password |
+| OTP Secret | The secret key from your ETH authenticator enrollment. Paste the base32 key (for example `JBSW Y3DP ...`) or the whole `otpauth://` link from the QR code. |
+| Realm | `student-net` (default), `staff-net`, or your group |
 
----
+On the first save, macOS asks once for your administrator password to install the VPN helper. After that, connecting only needs Touch ID.
 
-## Multiple profiles
+## How it works and security
 
-You can create as many profiles as you like (e.g. one for `student-net`, one for `staff-net`).
+OpenConnect needs root to create the tunnel. A one-time install puts a small helper and copies of `openconnect` and `vpnc-script` into `/Library/PrivilegedHelperTools/ethz-vpn/`, owned by root. A sudoers rule lets your account run only that helper without a password.
 
-**In the menu bar app:**
-- Open **Manage Profiles...** to add, edit, duplicate, delete, or set a default profile
-- When you have more than one profile, the **Connect** menu expands into a submenu listing all profiles
-- The active (last-used) profile is shown with a checkmark
-- **Right-click** the menu bar icon to instantly connect (default profile) or disconnect
+- The helper accepts only `connect`, `disconnect` and `version`, validates every argument, and runs OpenConnect with fixed options. It cannot be used to run other commands as root.
+- Your password and OTP secret are passed to the helper on stdin. They never appear in process arguments or user-writable files.
+- Secrets are encrypted to a Secure Enclave key that requires Touch ID or your Mac password for every use. Only ciphertext and the enclave-wrapped key are stored in `~/Library/Application Support/ETHZ VPN`, so neither someone at your unlocked Mac nor malware running as your user can read them without you approving the prompt. The key cannot be used on any other Mac.
+- Saved secrets are never shown in the app again.
 
-**In the CLI:**
-```
-ethz-vpn connect staff        Connect using the "staff" profile
-ethz-vpn default student      Set "student" as the default
-ethz-vpn profiles             List all profiles
-```
+Saving the OTP secret on your Mac turns the Mac, together with your fingerprint, into your second factor.
 
----
-
-## Developer setup
-
-### Prerequisites
-
-```bash
-brew install openconnect dylibbundler
-```
-
-### Make targets
-
-| Target | Description |
-|--------|-------------|
-| `make fetch-openconnect` | Copy installed openconnect + all dylibs into `Resources/` (run once after `brew install openconnect`) |
-| `make build` | Compile the Swift app (`swift build -c release`) |
-| `make bundle` | Assemble `ETHZ VPN.app` in `~/Applications` |
-| `make install` | Same as `bundle` — copies app to `~/Applications` (no sudoers written) |
-| `make dist` | Build, codesign, and package to `dist/ETHZ VPN.dmg` for distribution |
-| `make uninstall` | Remove `~/Applications/ETHZ VPN.app` and `/etc/sudoers.d/ethz-vpn` |
-| `make clean` | Remove Swift build artifacts |
-
-### Build and distribute
-
-```bash
-# First time only — bundle openconnect into the app resources
-make fetch-openconnect
-
-# Build and produce a distributable DMG
-make dist
-# → dist/ETHZ VPN.dmg
-```
-
-The DMG can be sent to anyone. No Homebrew required on the recipient's machine.
-
-### Developer-only build (no bundled openconnect)
-
-If you just want to run the app locally and already have openconnect installed via Homebrew:
-
-```bash
-make install
-```
-
-The app will fall back to the Homebrew binary automatically.
-
----
-
-## CLI (`ethz-vpn.sh`)
-
-For terminal use, symlink `ethz-vpn.sh` as `ethz-vpn`:
+## CLI
 
 ```bash
 ln -s "$(pwd)/ethz-vpn.sh" /usr/local/bin/ethz-vpn
-chmod +x ethz-vpn.sh
 ```
 
 ```
-ethz-vpn connect [name]    Connect (optionally specify a profile name)
-ethz-vpn disconnect        Disconnect
-ethz-vpn status            Show connection status
-ethz-vpn profiles          List all saved profiles
-ethz-vpn add               Add a new profile interactively
-ethz-vpn edit <name>       Edit an existing profile
-ethz-vpn delete <name>     Delete a profile
-ethz-vpn default <name>    Set the default profile
-ethz-vpn --help            Show help
+ethz-vpn connect [profile]   Connect (default profile if omitted), asks for Touch ID
+ethz-vpn disconnect          Disconnect
+ethz-vpn status              Show connection status
+ethz-vpn profiles            List profiles
 ```
 
-The CLI requires `openconnect` and `sudo` in PATH, and a sudoers rule for passwordless operation. Run the app's **Manage Profiles** window first, or use `ethz-vpn add` to configure via terminal.
+Profiles are managed in the app. Connecting runs the app binary, since only it can unlock the secrets.
 
----
+## Troubleshooting
 
-## Credentials storage
+- **"Could not reach sslvpn.ethz.ch"** while other sites work: another VPN client may be holding routes. Quit it and retry.
+- **"Login failed"**: check the username, WLAN password, realm, and that your Mac's clock is set automatically (TOTP codes depend on it).
+- **Details**: *Copy Connection Log* in the menu, or
+  `log show --last 10m --predicate 'subsystem == "com.dcamenisch.ethz-vpn-menubar"'`.
 
-| Secret | Where |
-|--------|-------|
-| WLAN password (per profile) | macOS Keychain (`eth-vpn-password-<profile-id>`) |
-| OTP secret (per profile) | macOS Keychain (`eth-vpn-token-<profile-id>`) |
-| Profile list | `~/.local/share/ethz-vpn-connect/profiles.json` |
-| Active profile ID | `UserDefaults` (`com.apple.ETHVPNMenuBar`) |
+## Build from source
 
-The sudoers rule is written to `/etc/sudoers.d/ethz-vpn` and allows the current user to run openconnect and `pkill` without a password.
+```bash
+brew install openconnect dylibbundler
+make fetch-openconnect   # bundle openconnect, its libraries and vpnc-script
+make install             # build into ~/Applications/ETHZ VPN.app
+make dist                # signed DMG in dist/
+```
 
----
-
-## Reinstalling or moving the app
-
-If you move the `.app` to a different path, the sudoers rule will point to the old binary location. Open **Manage Profiles...** and re-save any profile to rewrite the sudoers rule.
-
----
+With only the Command Line Tools installed (no Xcode), point the build at an SDK whose SwiftUI macros ship with them, e.g. `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk make install`.
 
 ## Uninstall
 
 ```bash
 make uninstall
+rm -rf ~/Library/Application\ Support/ETHZ\ VPN
 ```
 
-Or manually:
+## License
 
-```bash
-rm -rf ~/Applications/ETH\ VPN.app
-sudo rm -f /etc/sudoers.d/ethz-vpn
-# Remove Keychain entries for each profile (replace <id> with your profile id)
-security delete-generic-password -a "$USER" -s eth-vpn-password-<id>
-security delete-generic-password -a "$USER" -s eth-vpn-token-<id>
-# Remove config files
-rm -rf ~/.local/share/ethz-vpn-connect
-```
+Changes in this fork are MIT licensed, see [LICENSE](LICENSE). The original code by Danny Camenisch has no license; see [NOTICE](NOTICE) for details and third-party licenses.

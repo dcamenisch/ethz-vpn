@@ -1,0 +1,135 @@
+#!/bin/bash
+# Privileged helper for ETHZ VPN, the only command the sudoers rule allows.
+# Runs root-owned copies of openconnect and vpnc-script with fixed options and
+# validated arguments; secrets are read from stdin, never argv.
+#
+#   ethz-vpn-helper version
+#   ethz-vpn-helper connect|connect-bg <username> <realm> <server>  (stdin: password, otp secret)
+#   ethz-vpn-helper disconnect
+#
+# Must stay compatible with /bin/bash 3.2.
+
+set -euo pipefail
+umask 077
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+IFS=$' \t\n'
+
+readonly HELPER_VERSION=3
+readonly BASE_DIR=/Library/PrivilegedHelperTools/ethz-vpn
+readonly OPENCONNECT="$BASE_DIR/Resources/openconnect"
+readonly VPNC_SCRIPT="$BASE_DIR/Resources/vpnc-script"
+
+readonly EX_USAGE=64 EX_DATAERR=65 EX_UNAVAILABLE=69 EX_TEMPFAIL=75
+
+die() {
+	printf 'ethz-vpn-helper: %s\n' "$1" >&2
+	exit "${2:-$EX_USAGE}"
+}
+
+readonly NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+readonly HOST_RE='^[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?$'
+readonly BASE32_RE='^[A-Z2-7]+=*$'
+
+require_root() {
+	[[ $(id -u) -eq 0 ]] || die "must be run as root (via sudo)" "$EX_USAGE"
+}
+
+check_install() {
+	[[ -x $OPENCONNECT ]] || die "openconnect is missing from $BASE_DIR — reinstall the helper from the app" "$EX_UNAVAILABLE"
+	[[ -f $VPNC_SCRIPT ]] || die "vpnc-script is missing from $BASE_DIR — reinstall the helper from the app" "$EX_UNAVAILABLE"
+}
+
+# A session killed before vpnc-script cleans up leaves a host route to the VPN
+# server via the old network's gateway, which breaks every later connect.
+clear_stale_server_route() {
+	local host=${1%%:*} gateway ip dest via
+	gateway=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
+	for ip in $(dscacheutil -q host -a name "$host" | awk '/^ip_address:/ {print $2}'); do
+		dest=$(route -n get "$ip" 2>/dev/null | awk '/destination:/ {print $2}')
+		via=$(route -n get "$ip" 2>/dev/null | awk '/gateway:/ {print $2}')
+		if [[ $dest == "$ip" && -n $via && $via != "$gateway" ]]; then
+			route -n delete -host "$ip" >/dev/null 2>&1 || true
+		fi
+	done
+}
+
+cmd_connect() {
+	local background=$1 username=$2 realm=$3 server=$4
+
+	[[ $username =~ $NAME_RE ]] || die "invalid username" "$EX_DATAERR"
+	[[ $realm =~ $NAME_RE ]]    || die "invalid realm" "$EX_DATAERR"
+	[[ $server =~ $HOST_RE ]]   || die "invalid server hostname" "$EX_DATAERR"
+	check_install
+
+	if pgrep -x openconnect >/dev/null 2>&1; then
+		die "openconnect is already running — disconnect first" "$EX_TEMPFAIL"
+	fi
+
+	clear_stale_server_route "$server"
+
+	local password="" token=""
+	IFS= read -r password || true
+	IFS= read -r token || true
+	[[ -n $password ]]          || die "no password given on stdin" "$EX_DATAERR"
+	[[ $token =~ $BASE32_RE ]]  || die "OTP secret is not valid base32" "$EX_DATAERR"
+
+	WORKDIR=$(mktemp -d /private/var/run/ethz-vpn.XXXXXX)
+	trap 'rm -rf "$WORKDIR"' EXIT
+	trap 'exit 130' INT TERM
+	printf 'token-mode=totp\ntoken-secret=sha1:base32:%s\n' "$token" >"$WORKDIR/config"
+	token=""
+
+	local -a args=(
+		--protocol=anyconnect
+		--useragent=AnyConnect
+		--no-external-auth
+		--non-inter
+		--passwd-on-stdin
+		--config "$WORKDIR/config"
+		--script "$VPNC_SCRIPT"
+		-u "${username}@${realm}.ethz.ch"
+		-g "$realm"
+	)
+	[[ $background == 1 ]] && args+=(--background)
+
+	local status=0
+	printf '%s\n' "$password" | "$OPENCONNECT" "${args[@]}" -- "$server" || status=$?
+	password=""
+	exit "$status"
+}
+
+cmd_disconnect() {
+	pgrep -x openconnect >/dev/null 2>&1 || exit 0
+	pkill -INT -x openconnect || true
+	for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+		pgrep -x openconnect >/dev/null 2>&1 || exit 0
+		sleep 0.5
+	done
+	pkill -KILL -x openconnect || true
+}
+
+main() {
+	require_root
+	local cmd=${1:-}
+	case $cmd in
+		version)
+			check_install
+			printf '%s\n' "$HELPER_VERSION"
+			;;
+		connect|connect-bg)
+			[[ $# -eq 4 ]] || die "usage: $0 $cmd <username> <realm> <server>"
+			local bg=0
+			[[ $cmd == connect-bg ]] && bg=1
+			cmd_connect "$bg" "$2" "$3" "$4"
+			;;
+		disconnect)
+			[[ $# -eq 1 ]] || die "usage: $0 disconnect"
+			cmd_disconnect
+			;;
+		*)
+			die "usage: $0 version|connect|connect-bg|disconnect"
+			;;
+	esac
+}
+
+main "$@"

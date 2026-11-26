@@ -1,5 +1,9 @@
-import Foundation
 import AppKit
+import Darwin
+import Foundation
+import LocalAuthentication
+import Observation
+import os
 import UserNotifications
 
 enum VPNState {
@@ -8,135 +12,86 @@ enum VPNState {
     case disconnected
     case disconnecting
 
-    var isConnected: Bool    { if case .connected    = self { return true }; return false }
-    var isTransitioning: Bool { if case .connecting  = self { return true }
-                                if case .disconnecting = self { return true }; return false }
+    var isConnected: Bool { if case .connected = self { return true }; return false }
+    var isTransitioning: Bool {
+        switch self {
+        case .connecting, .disconnecting: return true
+        default: return false
+        }
+    }
 }
 
-// MARK: - App-wide constants
 enum AppConstants {
-    static let appName        = "ETH VPN"
-    static let defaultRealm   = "student-net"
-    static let defaultServer  = "sslvpn.ethz.ch"
+    static let appName       = "ETHZ VPN"
+    static let defaultRealm  = "student-net"
+    static let defaultServer = "sslvpn.ethz.ch"
 }
 
-final class VPNController {
+@Observable final class VPNController {
     static let shared = VPNController()
 
     private(set) var state: VPNState = .disconnected
-    private var statusTimer: Timer?
-    private var openconnectProcess: Process?
+    private(set) var lastError: String?
+    private(set) var log: [String] = []
+    private(set) var connectedSince: Date?
     var onStateChange: ((VPNState) -> Void)?
+    var onError: ((String) -> Void)?
+
+    private var statusTimer: Timer?
+    private var process: Process?
+    private var pendingOutput = Data()
+    private static let logger = Logger(subsystem: "com.dcamenisch.ethz-vpn-menubar", category: "vpn")
+    private static let connectTimeout: TimeInterval = 60
+    private static let connectedMarkers = ["Configured as ", "Connected as ", "ESP session established", "DTLS connected"]
 
     private init() {
-        // Synchronous initial check so state is correct before first UI render
-        if isOpenconnectRunning() {
-            state = .connected(ip: vpnIP() ?? "")
-        }
+        if isOpenconnectRunning() { state = .connected(ip: vpnIP() ?? ""); connectedSince = Date() }
         startPolling()
     }
 
     // MARK: - Public API
 
     func connect(profile: VPNProfile? = nil) {
-        // Gate on our state machine, not pgrep — avoids a race where the
-        // sudo/openconnect process is still dying but pgrep still finds it.
         guard case .disconnected = state else { return }
-        let store = ProfileStore.shared
-        guard let target = profile ?? store.activeProfile else {
+        guard let target = profile ?? ProfileStore.shared.activeProfile, !target.username.isEmpty else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
             return
         }
-        guard
-            let password = store.password(for: target),
-            let token    = store.token(for: target)
-        else {
-            NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
-            return
-        }
-        let username = target.username
-        let realm    = target.realm
-        let server   = target.server
-        guard !username.isEmpty else {
-            NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
-            return
-        }
-        // Remember this as the active profile
-        store.activeProfileID = target.id
-
+        ProfileStore.shared.activeProfileID = target.id
+        lastError = nil
         setState(.connecting)
-
-        let openconnectPath = bundledOpenconnectPath()
-
-        // Write token config to a temp file (mode 0600) so the secret never
-        // appears in the process argument list (visible via `ps aux`).
-        let configPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ethz-vpn-\(UUID().uuidString).conf").path
-        let configContent = "token-mode=totp\ntoken-secret=sha1:base32:\(token)\n"
-        let configData = configContent.data(using: .utf8)!
-        FileManager.default.createFile(atPath: configPath, contents: configData,
-                                       attributes: [.posixPermissions: 0o600])
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        // Run openconnect WITHOUT -b: we keep the process alive in the background
-        // via Swift's Process (which is already async). The -b flag causes openconnect
-        // to fork-and-exit, which tears down stdin before the child can read the password.
-        process.arguments = [
-            openconnectPath,
-            "-u", "\(username)@\(realm).ethz.ch",
-            "-g", realm,
-            "--useragent=AnyConnect",
-            "--passwd-on-stdin",
-            "--config", configPath,
-            "--no-external-auth",
-            server
-        ]
-
-        let stdinPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = stderrPipe
-
-        process.terminationHandler = { [weak self] proc in
-            // Config file is no longer needed once the process exits
-            try? FileManager.default.removeItem(atPath: configPath)
-            let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            let errText = String(data: errData, encoding: .utf8) ?? ""
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // Only update state if this is still the active process —
-                // prevents a stale termination handler from clobbering a
-                // reconnect that already launched a new process.
-                guard self.openconnectProcess === proc else { return }
-                self.openconnectProcess = nil
-                self.setState(.disconnected)
-                if proc.terminationStatus != 0 {
-                    let detail = errText
-                        .components(separatedBy: .newlines)
-                        .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
-                        ?? "status \(proc.terminationStatus)"
-                    self.postNotification(body: "Connection failed: \(detail)")
-                }
+        SecretVault.authenticate(reason: "connect to the ETH VPN as \(target.username)") { [weak self] result in
+            switch result {
+            case .success(let context): self?.start(target, context: context)
+            case .failure(let error as LAError) where [.userCancel, .appCancel, .systemCancel].contains(error.code):
+                self?.setState(.disconnected)
+            case .failure(let error): self?.fail(error.localizedDescription)
             }
-        }
-
-        do {
-            try process.run()
-            openconnectProcess = process
-            // Write password then close stdin so openconnect knows input is done
-            let input = (password + "\n").data(using: .utf8)!
-            stdinPipe.fileHandleForWriting.write(input)
-            stdinPipe.fileHandleForWriting.closeFile()
-        } catch {
-            try? FileManager.default.removeItem(atPath: configPath)
-            setState(.disconnected)
-            postNotification(body: "Failed to launch openconnect: \(error.localizedDescription)")
         }
     }
 
-    /// Connects if disconnected, disconnects if connected, no-ops while transitioning.
+    private func start(_ target: VPNProfile, context: LAContext) {
+        let secrets: (password: String, token: String)?
+        do { secrets = try ProfileStore.shared.secrets(for: target, context: context) } catch {
+            fail(error.localizedDescription)
+            return
+        }
+        guard let (password, token) = secrets else {
+            fail("No password or OTP secret is saved for “\(target.displayName)”. Edit the profile and enter them again.")
+            return
+        }
+        if PrivilegedHelper.isInstalled() {
+            launch(target, password: password, token: token)
+            return
+        }
+        PrivilegedHelper.install { [weak self] result in
+            switch result {
+            case .success: self?.launch(target, password: password, token: token)
+            case .failure(let error): self?.fail(error.localizedDescription)
+            }
+        }
+    }
+
     func toggleConnection() {
         switch state {
         case .disconnected: connect()
@@ -146,136 +101,209 @@ final class VPNController {
     }
 
     func disconnect() {
-        guard isOpenconnectRunning() else { return }
+        guard process != nil || isOpenconnectRunning() else { return }
         setState(.disconnecting)
-        openconnectProcess = nil  // disown so any pending terminationHandler is a no-op
-        shell("/usr/bin/sudo", ["/usr/bin/pkill", "-SIGINT", "-x", "openconnect"])
-        // Force-kill fallback: if still running after 6s, send SIGKILL
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            guard case .disconnecting = self?.state else { return }
-            _ = self?.shell("/usr/bin/sudo", ["/usr/bin/pkill", "-SIGKILL", "-x", "openconnect"])
-            self?.setState(.disconnected)
+        process = nil
+        stopHelper { [weak self] in
+            if case .disconnecting = self?.state { self?.setState(.disconnected) }
         }
     }
 
-    // MARK: - Status polling
+    // MARK: - Connection
 
-    func startPolling() {
+    private func launch(_ profile: VPNProfile, password: String, token: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        proc.arguments = ["-n", PrivilegedHelper.helperPath, "connect", profile.username, profile.realm, profile.server]
+
+        let stdin = Pipe(), output = Pipe()
+        proc.standardInput = stdin
+        proc.standardOutput = output
+        proc.standardError = output
+        log = ["Connecting [\(profile.displayName)] \(profile.username)@\(profile.realm).ethz.ch to \(profile.server)"]
+        pendingOutput = Data()
+
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            DispatchQueue.main.async { self?.consume(data, from: proc) }
+        }
+        proc.terminationHandler = { [weak self] proc in
+            output.fileHandleForReading.readabilityHandler = nil
+            let rest = output.fileHandleForReading.readDataToEndOfFile()
+            DispatchQueue.main.async {
+                self?.consume(rest, from: proc)
+                self?.processExited(proc, server: profile.server)
+            }
+        }
+
+        do {
+            try proc.run()
+        } catch {
+            fail("Could not start the VPN helper: \(error.localizedDescription)")
+            return
+        }
+        process = proc
+        stdin.fileHandleForWriting.write(Data("\(password)\n\(token)\n".utf8))
+        try? stdin.fileHandleForWriting.close()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.connectTimeout) { [weak self] in
+            guard let self, self.process === proc, case .connecting = self.state else { return }
+            self.process = nil
+            self.stopHelper {}
+            self.fail("Timed out after \(Int(Self.connectTimeout)) seconds without a connection to \(profile.server).")
+        }
+    }
+
+    private func consume(_ data: Data, from proc: Process) {
+        guard process === proc, !data.isEmpty else { return }
+        pendingOutput.append(data)
+        while let newline = pendingOutput.firstIndex(of: 0x0A) {
+            let line = String(decoding: pendingOutput[..<newline], as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            pendingOutput.removeSubrange(...newline)
+            guard !line.isEmpty else { continue }
+            log.append(line)
+            Self.logger.info("\(line, privacy: .public)")
+            if log.count > 300 { log.removeFirst(log.count - 300) }
+            if case .connecting = state, Self.connectedMarkers.contains(where: line.contains) {
+                setState(.connected(ip: vpnIP() ?? ""))
+            }
+        }
+    }
+
+    private func processExited(_ proc: Process, server: String) {
+        guard process === proc else { return }
+        process = nil
+        if let tail = String(data: pendingOutput, encoding: .utf8), !tail.isEmpty { log.append(tail) }
+        let wasConnecting = { if case .connecting = state { return true }; return false }()
+        if wasConnecting || proc.terminationStatus != 0 {
+            fail(ConnectionDiagnosis.message(status: proc.terminationStatus, log: log, server: server))
+        } else {
+            setState(.disconnected)
+            postNotification(body: "VPN connection closed.")
+        }
+    }
+
+    private func fail(_ message: String) {
+        lastError = message
+        log.append("Error: \(message)")
+        Self.logger.error("\(message, privacy: .public)")
+        setState(.disconnected)
+        postNotification(body: message)
+        onError?(message)
+    }
+
+    private func stopHelper(completion: @escaping () -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            PrivilegedHelper.run("/usr/bin/sudo", ["-n", PrivilegedHelper.helperPath, "disconnect"])
+            DispatchQueue.main.async(execute: completion)
+        }
+    }
+
+    // MARK: - Status polling (also picks up sessions started from the CLI)
+
+    private func startPolling() {
         statusTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             self?.pollStatus()
         }
-        pollStatus()
     }
 
     private func pollStatus() {
         let running = isOpenconnectRunning()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            switch self.state {
-            case .connecting:
-                if running {
-                    let ip = self.vpnIP() ?? ""
-                    self.setState(.connected(ip: ip))
-                }
-            case .disconnecting:
-                if !running {
-                    self.setState(.disconnected)
-                }
-            case .connected:
-                if !running {
-                    self.setState(.disconnected)
-                    self.postNotification(body: "VPN disconnected unexpectedly.")
-                } else {
-                    // Refresh IP
-                    let ip = self.vpnIP() ?? ""
-                    self.setState(.connected(ip: ip))
-                }
-            case .disconnected:
-                if running {
-                    let ip = self.vpnIP() ?? ""
-                    self.setState(.connected(ip: ip))
-                }
+        switch state {
+        case .connecting:
+            break
+        case .disconnecting:
+            if !running { setState(.disconnected) }
+        case .connected:
+            if running {
+                setState(.connected(ip: vpnIP() ?? ""))
+            } else if process == nil {
+                setState(.disconnected)
+                postNotification(body: "VPN disconnected unexpectedly.")
             }
+        case .disconnected:
+            if running { setState(.connected(ip: vpnIP() ?? "")) }
         }
     }
 
     // MARK: - Helpers
 
     private func setState(_ newState: VPNState) {
+        if !newState.isConnected { connectedSince = nil }
+        else if !state.isConnected { connectedSince = Date() }
         state = newState
         onStateChange?(newState)
     }
 
     func isOpenconnectRunning() -> Bool {
-        let result = shell("/usr/bin/pgrep", ["-x", "openconnect"])
-        return result == 0
+        PrivilegedHelper.run("/usr/bin/pgrep", ["-x", "openconnect"]).status == 0
     }
 
     func vpnIP() -> String? {
-        // Enumerate utun interfaces for an inet address
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0 else { return nil }
         defer { freeifaddrs(ifaddr) }
         var cursor = ifaddr
         while let ifa = cursor {
-            let name = String(cString: ifa.pointee.ifa_name)
-            if name.hasPrefix("utun"), let addr = ifa.pointee.ifa_addr, addr.pointee.sa_family == AF_INET {
-                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
-                    let ip = String(cString: hostname)
-                    if !ip.isEmpty { return ip }
-                }
+            defer { cursor = ifa.pointee.ifa_next }
+            guard String(cString: ifa.pointee.ifa_name).hasPrefix("utun"),
+                  let addr = ifa.pointee.ifa_addr, addr.pointee.sa_family == AF_INET else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                let ip = String(cString: host)
+                if !ip.isEmpty { return ip }
             }
-            cursor = ifa.pointee.ifa_next
         }
         return nil
     }
 
-    @discardableResult
-    private func shell(_ executable: String, _ arguments: [String]) -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-        return process.terminationStatus
-    }
-
-    private func bundledOpenconnectPath() -> String {
-        // 1. Canonical bundle location: Contents/Resources/openconnect
-        //    This must match the path written into the sudoers rule.
-        //    We check this before Bundle.main.path(forResource:) because SPM may
-        //    nest a second copy under Resources/Resources/ which would mismatch.
-        if let bundleResources = Bundle.main.resourceURL {
-            let canonical = bundleResources.appendingPathComponent("openconnect").path
-            let real = URL(fileURLWithPath: canonical).resolvingSymlinksInPath().path
-            if FileManager.default.isExecutableFile(atPath: real) { return real }
-        }
-        // 2. Homebrew fallbacks (developer machine)
-        for path in ["/opt/homebrew/bin/openconnect", "/usr/local/bin/openconnect"] {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-                return FileManager.default.isExecutableFile(atPath: real) ? real : path
-            }
-        }
-        return "openconnect"
-    }
-
-    func resolvedOpenconnectPath() -> String { bundledOpenconnectPath() }
-
-    func postNotification(body: String) {
+    private func postNotification(body: String) {
         let content = UNMutableNotificationContent()
         content.title = AppConstants.appName
         content.body = body
-        let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(req)
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 }
 
-// MARK: - C socket imports
-import Darwin
+/// Turns openconnect/helper output into an actionable message.
+enum ConnectionDiagnosis {
+    static func message(status: Int32, log: [String], server: String) -> String {
+        let text = log.joined(separator: "\n").lowercased()
+        func has(_ needles: String...) -> Bool { needles.contains { text.contains($0) } }
+
+        if has("a password is required", "a terminal is required") {
+            return "The VPN helper is not authorized. Open Manage Profiles and save a profile to reinstall it."
+        }
+        if let helperLine = log.last(where: { $0.hasPrefix("ethz-vpn-helper:") }) {
+            return String(helperLine.dropFirst("ethz-vpn-helper:".count)).trimmingCharacters(in: .whitespaces).capitalizedFirst
+        }
+        if has("login failed", "failed to obtain webvpn cookie", "authentication failed", "auth failed", "invalid credentials") {
+            return "Login failed. ETH rejected the username, WLAN password or OTP code. Check the profile, the realm, and that your Mac's clock is correct."
+        }
+        if has("tokencode", "token secret", "otp") && has("fail", "invalid") {
+            return "The OTP secret could not be used to generate a code. Re-enter it in the profile."
+        }
+        if has("getaddrinfo", "failed to resolve", "nodename nor servname") {
+            return "Could not resolve \(server). Check your internet connection and the server name."
+        }
+        if has("failed to connect to", "connection refused", "network is unreachable", "failed to open https connection", "no route to host", "timed out") {
+            return "Could not reach \(server). Check your internet connection."
+        }
+        if has("certificate") && has("verify", "invalid", "fail") {
+            return "The server certificate for \(server) could not be verified."
+        }
+        if has("vpnc-script", "failed to spawn script") || (has("script") && has("returned error")) {
+            return "Connected, but configuring the network failed (vpnc-script). Reinstall the helper from Manage Profiles."
+        }
+        let last = log.last(where: { !$0.hasPrefix("Connecting [") }) ?? "no output"
+        return "openconnect exited with status \(status): \(last)"
+    }
+}
+
+private extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
 
 extension Notification.Name {
     static let vpnSecretsNotFound = Notification.Name("com.dcamenisch.ethz-vpn.secretsNotFound")

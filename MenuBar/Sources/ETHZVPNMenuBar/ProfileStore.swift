@@ -1,51 +1,36 @@
 import Foundation
+import LocalAuthentication
 
 struct VPNProfile: Codable, Identifiable, Equatable {
-    var id: String       // unique name, used as Keychain key suffix
+    var id: String
     var displayName: String
     var username: String
     var realm: String
-    var server: String
+    var server = AppConstants.defaultServer
+    /// Ciphertext from `SecretVault.seal`, only decryptable on this Mac after Touch ID.
+    var sealedPassword: String?
+    var sealedToken: String?
 
-    /// Backward-compatible decoder: older profiles without `server` default to sslvpn.ethz.ch
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id          = try c.decode(String.self, forKey: .id)
-        displayName = try c.decode(String.self, forKey: .displayName)
-        username    = try c.decode(String.self, forKey: .username)
-        realm       = try c.decode(String.self, forKey: .realm)
-        server      = try c.decodeIfPresent(String.self, forKey: .server) ?? AppConstants.defaultServer
-    }
-
-    init(id: String, displayName: String, username: String, realm: String, server: String = AppConstants.defaultServer) {
-        self.id = id
-        self.displayName = displayName
-        self.username = username
-        self.realm = realm
-        self.server = server
-    }
-
-    var passwordService: String { "eth-vpn-password-\(id)" }
-    var tokenService:   String { "eth-vpn-token-\(id)" }
+    var isComplete: Bool { !username.isEmpty && sealedPassword != nil && sealedToken != nil }
 }
 
 @Observable final class ProfileStore {
     static let shared = ProfileStore()
 
-    private let storeURL: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/ethz-vpn-connect")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("profiles.json")
+    static let directory: URL = {
+        let dir = URL.applicationSupportDirectory.appendingPathComponent("ETHZ VPN")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        return dir
     }()
+    private let storeURL = directory.appendingPathComponent("profiles.json")
 
-    private let activeProfileIDKey = "eth-vpn-active-profile-id"
+    private static let activeProfileIDKey = "eth-vpn-active-profile-id"
 
     private(set) var profiles: [VPNProfile] = []
 
-    @ObservationIgnored var activeProfileID: String? {
-        get { UserDefaults.standard.string(forKey: activeProfileIDKey) }
-        set { UserDefaults.standard.set(newValue, forKey: activeProfileIDKey) }
+    var activeProfileID = UserDefaults.standard.string(forKey: activeProfileIDKey) {
+        didSet { UserDefaults.standard.set(activeProfileID, forKey: Self.activeProfileIDKey) }
     }
 
     var activeProfile: VPNProfile? {
@@ -57,25 +42,26 @@ struct VPNProfile: Codable, Identifiable, Equatable {
 
     // MARK: - Persistence
 
-    func load() {
-        guard let data = try? Data(contentsOf: storeURL),
-              let decoded = try? JSONDecoder().decode([VPNProfile].self, from: data) else {
-            profiles = migratedLegacyProfile().map { [$0] } ?? []
-            return
-        }
-        profiles = decoded
+    private func load() {
+        profiles = (try? Data(contentsOf: storeURL))
+            .flatMap { try? JSONDecoder().decode([VPNProfile].self, from: $0) } ?? []
     }
 
     func save() {
-        let data = try? JSONEncoder().encode(profiles)
-        try? data?.write(to: storeURL, options: .atomic)
+        guard let data = try? JSONEncoder().encode(profiles) else { return }
+        try? data.write(to: storeURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storeURL.path)
+    }
+
+    static func makeID(from name: String) -> String {
+        let id = name.lowercased().replacingOccurrences(of: " ", with: "-")
+            .filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+        return id.isEmpty ? UUID().uuidString.lowercased() : id
     }
 
     // MARK: - Mutation
 
-    func upsert(_ profile: VPNProfile, password: String, token: String) {
-        _ = KeychainHelper.set(service: profile.passwordService, value: password)
-        _ = KeychainHelper.set(service: profile.tokenService,   value: token)
+    func upsert(_ profile: VPNProfile) {
         if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[idx] = profile
         } else {
@@ -85,52 +71,16 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     }
 
     func delete(_ profile: VPNProfile) {
-        KeychainHelper.delete(service: profile.passwordService)
-        KeychainHelper.delete(service: profile.tokenService)
         profiles.removeAll { $0.id == profile.id }
         if activeProfileID == profile.id { activeProfileID = profiles.first?.id }
         save()
     }
 
-    // MARK: - Credential accessors
-
-    func password(for profile: VPNProfile) -> String? {
-        KeychainHelper.get(service: profile.passwordService)
+    /// Needs a context authenticated with `SecretVault.authenticate`.
+    func secrets(for profile: VPNProfile, context: LAContext) throws -> (password: String, token: String)? {
+        guard let password = profile.sealedPassword, let token = profile.sealedToken else { return nil }
+        return (try SecretVault.open(password, context: context), try SecretVault.open(token, context: context))
     }
 
-    func token(for profile: VPNProfile) -> String? {
-        KeychainHelper.get(service: profile.tokenService)
-    }
-
-    func isComplete(profile: VPNProfile) -> Bool {
-        KeychainHelper.exists(service: profile.passwordService) &&
-        KeychainHelper.exists(service: profile.tokenService) &&
-        !profile.username.isEmpty
-    }
-
-    var hasAnyCompleteProfile: Bool { profiles.contains(where: { isComplete(profile: $0) }) }
-
-    // MARK: - Legacy migration (single-profile flat files → first profile)
-
-    private func migratedLegacyProfile() -> VPNProfile? {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/ethz-vpn-connect")
-        let usernameURL = dir.appendingPathComponent("ethzvpnusername.txt")
-        guard let username = try? String(contentsOf: usernameURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !username.isEmpty,
-              KeychainHelper.exists(service: "eth-vpn-password"),
-              KeychainHelper.exists(service: "eth-vpn-token") else { return nil }
-
-        let realmURL = dir.appendingPathComponent("ethzvpnrealm.txt")
-        let realm = (try? String(contentsOf: realmURL, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines))
-            .flatMap { $0.isEmpty ? nil : $0 } ?? AppConstants.defaultRealm
-
-        // Migrate Keychain entries to new keys
-        let profile = VPNProfile(id: "default", displayName: "Default", username: username, realm: realm)
-        if let pw  = KeychainHelper.get(service: "eth-vpn-password") { _ = KeychainHelper.set(service: profile.passwordService, value: pw) }
-        if let tok = KeychainHelper.get(service: "eth-vpn-token")    { _ = KeychainHelper.set(service: profile.tokenService,    value: tok) }
-        return profile
-    }
+    var hasAnyCompleteProfile: Bool { profiles.contains(where: \.isComplete) }
 }

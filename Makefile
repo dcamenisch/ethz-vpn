@@ -5,8 +5,6 @@ PKG_PATH   = MenuBar
 BUILD_DIR  = $(PKG_PATH)/.build/release
 RESOURCES_DIR = $(PKG_PATH)/Sources/ETHZVPNMenuBar/Resources
 
-OPENCONNECT_BREW_PATH ?= $(shell command -v openconnect 2>/dev/null || echo /opt/homebrew/bin/openconnect)
-
 .PHONY: build bundle install uninstall clean fetch-openconnect dist
 
 fetch-openconnect:
@@ -18,12 +16,16 @@ fetch-openconnect:
 	mkdir -p $(RESOURCES_DIR)/lib; \
 	cp "$$OC_PATH" $(RESOURCES_DIR)/openconnect; \
 	chmod 755 $(RESOURCES_DIR)/openconnect; \
-	echo "Copied openconnect from $$OC_PATH"
+	echo "Copied openconnect from $$OC_PATH"; \
+	VPNC=$$(brew --prefix)/etc/vpnc/vpnc-script; \
+	if [ ! -f "$$VPNC" ]; then echo "Run: brew install vpnc-script" && exit 1; fi; \
+	cp "$$VPNC" $(RESOURCES_DIR)/vpnc-script; \
+	chmod 755 $(RESOURCES_DIR)/vpnc-script
 	xattr -d com.apple.quarantine $(RESOURCES_DIR)/openconnect 2>/dev/null || true
 	dylibbundler -od -b -x $(RESOURCES_DIR)/openconnect \
 		-d $(RESOURCES_DIR)/lib/ \
 		-p @executable_path/../Resources/lib/
-	@echo "Done: $(RESOURCES_DIR)/openconnect + lib/"
+	@echo "Done: $(RESOURCES_DIR)/openconnect + lib/ + vpnc-script"
 
 build:
 	swift build -c release --package-path $(PKG_PATH)
@@ -34,19 +36,9 @@ bundle: build
 	cp "$(BUILD_DIR)/$(BINARY)" "$(APP_BUNDLE)/Contents/MacOS/$(BINARY)"
 	cp Info.plist "$(APP_BUNDLE)/Contents/Info.plist"
 	cp AppIcon.icns "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
-	@# Copy bundled openconnect + dylibs from the SPM build output (SPM copies Resources/)
-	@if [ -d "$(BUILD_DIR)/$(BINARY)_$(BINARY).resources/Resources" ]; then \
-		cp -R "$(BUILD_DIR)/$(BINARY)_$(BINARY).resources/Resources" "$(APP_BUNDLE)/Contents/Resources/"; \
-		echo "Bundled openconnect from SPM resources."; \
-	elif [ -f "$(RESOURCES_DIR)/openconnect" ]; then \
-		cp -R "$(RESOURCES_DIR)" "$(APP_BUNDLE)/Contents/Resources/"; \
-		echo "Bundled openconnect from source Resources/."; \
-	elif [ -f "$(OPENCONNECT_BREW_PATH)" ]; then \
-		cp "$(OPENCONNECT_BREW_PATH)" "$(APP_BUNDLE)/Contents/Resources/openconnect"; \
-		echo "Bundled openconnect from $(OPENCONNECT_BREW_PATH) (no dylibs — developer machine only)."; \
-	else \
-		echo "Warning: openconnect not found. App will rely on system PATH."; \
-	fi
+	cp -R "$(RESOURCES_DIR)/." "$(APP_BUNDLE)/Contents/Resources/"
+	rm -f "$(APP_BUNDLE)/Contents/Resources/.gitkeep"
+	@[ -f "$(RESOURCES_DIR)/openconnect" ] || echo "Note: openconnect not bundled; the helper installer will use Homebrew's."
 
 install: bundle
 	@echo "Installing $(APP_NAME) to ~/Applications..."
@@ -63,7 +55,7 @@ dist: bundle
 
 uninstall:
 	rm -rf "$(APP_BUNDLE)"
-	sudo rm -f /etc/sudoers.d/eth-vpn
+	sudo rm -rf /etc/sudoers.d/ethz-vpn /Library/PrivilegedHelperTools/ethz-vpn
 	@echo "Uninstalled."
 
 clean:
