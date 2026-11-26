@@ -313,7 +313,13 @@ struct ProfileEditFormView: View {
 
         let store = ProfileStore.shared
         var newPassword: String? = password.isEmpty ? nil : password
-        var newToken: String? = trimOTP.isEmpty ? nil : trimOTP
+        var newToken: String?
+        if !trimOTP.isEmpty {
+            do { newToken = try OTPSecret.normalize(trimOTP) } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
         if profileID == nil {
             if let source = secretsSource {
                 newPassword = newPassword ?? store.password(for: source)
