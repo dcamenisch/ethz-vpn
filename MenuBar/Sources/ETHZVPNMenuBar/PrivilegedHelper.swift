@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Installs the root helper. The sudoers rule allows only the helper, which
 /// lives in a root-owned directory with its own copies of openconnect and vpnc-script.
@@ -77,7 +77,7 @@ enum PrivilegedHelper {
         return Sources(helper: helper, openconnect: openconnect, libDir: libDir, vpncScript: vpnc)
     }
 
-    /// Prompts for an admin password once. `completion` runs on the main queue.
+    /// Prompts for an admin password once. Call on the main thread.
     static func install(completion: @escaping (Result<Void, Error>) -> Void) {
         let done: (Result<Void, Error>) -> Void = { r in DispatchQueue.main.async { completion(r) } }
 
@@ -114,17 +114,19 @@ enum PrivilegedHelper {
         rm -f "$RULE"
         """
         let b64 = Data(script.utf8).base64EncodedString()
-        let appleScript = "do shell script \"echo \(b64) | /usr/bin/base64 -D | /bin/sh\" with administrator privileges"
+        let prompt = "ETHZ VPN needs your administrator password once to install its VPN helper."
+        let source = "do shell script \"echo \(b64) | /usr/bin/base64 -D | /bin/sh\" with prompt \"\(prompt)\" with administrator privileges"
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = run("/usr/bin/osascript", ["-e", appleScript])
-            if result.status == 0 {
-                done(isInstalled() ? .success(()) : .failure(InstallError.failed("the helper was copied but sudo still asks for a password.")))
-            } else if result.output.contains("-128") {
-                done(.failure(InstallError.cancelled))
-            } else {
-                done(.failure(InstallError.failed(result.output.trimmingCharacters(in: .whitespacesAndNewlines))))
-            }
+        // In-process, so the system prompt names this app rather than osascript.
+        var errorInfo: NSDictionary?
+        NSApp.activate(ignoringOtherApps: true)
+        NSAppleScript(source: source)?.executeAndReturnError(&errorInfo)
+        if let errorInfo {
+            let code = errorInfo[NSAppleScript.errorNumber] as? Int
+            let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "unknown error"
+            done(.failure(code == -128 ? InstallError.cancelled : InstallError.failed(message)))
+        } else {
+            done(isInstalled() ? .success(()) : .failure(InstallError.failed("sudo still asks for a password after installing.")))
         }
     }
 
