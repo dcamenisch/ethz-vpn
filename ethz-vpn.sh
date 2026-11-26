@@ -6,7 +6,7 @@
 set -euo pipefail
 
 readonly HELPER=/Library/PrivilegedHelperTools/ethz-vpn/ethz-vpn-helper
-readonly PROFILES_FILE="$HOME/.local/share/ethz-vpn-connect/profiles.json"
+readonly PROFILES_FILE="$HOME/Library/Application Support/ETHZ VPN/profiles.json"
 
 find_app() {
 	local dir

@@ -47,7 +47,7 @@ OpenConnect needs root to create the tunnel. A one-time install puts a small hel
 
 - The helper accepts only `connect`, `disconnect` and `version`, validates every argument, and runs OpenConnect with fixed options. It cannot be used to run other commands as root.
 - Your password and OTP secret are passed to the helper on stdin. They never appear in process arguments or user-writable files.
-- Secrets are encrypted to a Secure Enclave key that requires Touch ID or your Mac password for every use. Only ciphertext and the enclave-wrapped key are stored in `~/.local/share/ethz-vpn-connect`, so neither someone at your unlocked Mac nor malware running as your user can read them without you approving the prompt. The key cannot be used on any other Mac.
+- Secrets are encrypted to a Secure Enclave key that requires Touch ID or your Mac password for every use. Only ciphertext and the enclave-wrapped key are stored in `~/Library/Application Support/ETHZ VPN`, so neither someone at your unlocked Mac nor malware running as your user can read them without you approving the prompt. The key cannot be used on any other Mac.
 - Saved secrets are never shown in the app again.
 
 Saving the OTP secret on your Mac turns the Mac, together with your fingerprint, into your second factor.
@@ -89,7 +89,7 @@ With only the Command Line Tools installed (no Xcode), point the build at an SDK
 
 ```bash
 make uninstall
-rm -rf ~/.local/share/ethz-vpn-connect
+rm -rf ~/Library/Application\ Support/ETHZ\ VPN
 ```
 
 ## License

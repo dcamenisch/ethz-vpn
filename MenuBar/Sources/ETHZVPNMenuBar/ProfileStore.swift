@@ -18,7 +18,7 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     static let shared = ProfileStore()
 
     static let directory: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/ethz-vpn-connect")
+        let dir = URL.applicationSupportDirectory.appendingPathComponent("ETHZ VPN")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
         return dir
