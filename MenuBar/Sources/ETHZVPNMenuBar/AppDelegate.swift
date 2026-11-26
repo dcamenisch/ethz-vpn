@@ -225,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateUI(for state: VPNState) {
         switch state {
         case .connected(let ip):
-            setIcon(systemName: "lock.fill")
+            setIcon(.connected)
             let label = ip.isEmpty ? "Connected" : "Connected — \(ip)"
             if let active = ProfileStore.shared.activeProfile {
                 statusMenuItem.title = "● \(label) (\(active.displayName))"
@@ -233,13 +233,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 statusMenuItem.title = "● \(label)"
             }
         case .connecting:
-            setIcon(systemName: "clock")
+            setIcon(.transitioning)
             statusMenuItem.title = "Connecting..."
         case .disconnecting:
-            setIcon(systemName: "clock")
+            setIcon(.transitioning)
             statusMenuItem.title = "Disconnecting..."
         case .disconnected:
-            setIcon(systemName: "lock.open.fill")
+            setIcon(VPNController.shared.lastError == nil ? .disconnected : .failed)
             if let error = VPNController.shared.lastError {
                 statusMenuItem.title = "⚠ " + (error.count > 60 ? error.prefix(57) + "…" : error)
                 statusMenuItem.toolTip = error
@@ -254,10 +254,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         disconnectMenuItem.isHidden = !state.isConnected
     }
 
-    private func setIcon(systemName: String) {
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)
-            button.image?.isTemplate = true
+    private enum IconStyle { case connected, transitioning, disconnected, failed }
+    private var blinkTimer: Timer?
+
+    private func setIcon(_ style: IconStyle) {
+        guard let button = statusItem.button else { return }
+        let symbol = style == .failed ? "exclamationmark.shield" : "network.badge.shield.half.filled"
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: AppConstants.appName)
+        button.image?.isTemplate = true
+        button.appearsDisabled = style != .connected
+        blinkTimer?.invalidate()
+        blinkTimer = nil
+        if style == .transitioning {
+            blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak button] _ in
+                button?.appearsDisabled.toggle()
+            }
         }
     }
 
