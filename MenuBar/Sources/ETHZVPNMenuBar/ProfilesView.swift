@@ -11,24 +11,34 @@ struct ProfilesView: View {
             VStack(spacing: 6) {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
-                    .frame(width: 72, height: 72)
+                    .frame(width: 80, height: 80)
                 Text("ETHZ VPN").font(.title2.bold())
                 Text("One click to the ETH network, secured with Touch ID")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 20)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
 
             if store.profiles.isEmpty {
                 ContentUnavailableView("No profiles yet", systemImage: "person.crop.circle.badge.plus",
                                        description: Text("Add your ETH account to get started."))
                     .frame(height: 160)
             } else {
-                List(store.profiles) { profile in
-                    row(profile)
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(store.profiles) { profile in
+                            if profile.id != store.profiles.first?.id { Divider().padding(.leading, 50) }
+                            row(profile).padding(.horizontal, 14).padding(.vertical, 10)
+                        }
+                    }
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
-                .frame(minHeight: 120, maxHeight: 260)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: 300)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
@@ -40,6 +50,7 @@ struct ProfilesView: View {
             .padding(16)
         }
         .frame(width: 480)
+        .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $editor) { request in
             ProfileEditView(profile: request.profile, isDuplicate: request.isDuplicate) { editor = nil }
         }
@@ -80,7 +91,6 @@ struct ProfilesView: View {
             .menuIndicator(.hidden)
             .fixedSize()
         }
-        .padding(.vertical, 4)
     }
 }
 
