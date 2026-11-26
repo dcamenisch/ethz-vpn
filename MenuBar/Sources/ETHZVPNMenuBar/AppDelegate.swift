@@ -1,4 +1,5 @@
 import AppKit
+import Network
 import ServiceManagement
 import UserNotifications
 
@@ -12,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var disconnectMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
     private var requireAuthMenuItem: NSMenuItem!
+    private var autoConnectMenuItem: NSMenuItem!
+    private var networkMonitor: NWPathMonitor?
+    private let autoConnectKey = "eth-vpn-auto-connect"
 
     var setupWindowController: SetupWindowController?
 
@@ -21,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMenu()  // calls rebuildProfilesSubmenu() at end
         setupVPNController()
         performFirstRunChecksIfNeeded()
+        autoConnectIfNeeded()
         updateUI(for: VPNController.shared.state)  // icon + labels only
         NotificationCenter.default.addObserver(
             self,
@@ -69,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requireAuthMenuItem.target = self
         requireAuthMenuItem.state = Authenticator.isRequired ? .on : .off
         menu.addItem(requireAuthMenuItem)
+
+        autoConnectMenuItem = NSMenuItem(title: "Connect at Launch", action: #selector(toggleAutoConnect), keyEquivalent: "")
+        autoConnectMenuItem.target = self
+        autoConnectMenuItem.state = UserDefaults.standard.bool(forKey: autoConnectKey) ? .on : .off
+        menu.addItem(autoConnectMenuItem)
 
         launchAtLoginMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchAtLoginMenuItem.target = self
@@ -302,17 +312,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleLaunchAtLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-                launchAtLoginMenuItem.state = .off
-            } else {
-                try SMAppService.mainApp.register()
-                launchAtLoginMenuItem.state = .on
-            }
-        } catch {
-            // Silently ignore — registration may fail if app is not in /Applications
+    @objc private func toggleAutoConnect() {
+        let enabled = !UserDefaults.standard.bool(forKey: autoConnectKey)
+        UserDefaults.standard.set(enabled, forKey: autoConnectKey)
+        autoConnectMenuItem.state = enabled ? .on : .off
+    }
+
+    /// At login the network is often not up yet, so wait for it (up to 30s) before connecting.
+    private func autoConnectIfNeeded() {
+        guard UserDefaults.standard.bool(forKey: autoConnectKey),
+              ProfileStore.shared.hasAnyCompleteProfile,
+              !VPNController.shared.state.isConnected else { return }
+        let monitor = NWPathMonitor()
+        networkMonitor = monitor
+        let fire = { [weak self] in
+            guard let self, self.networkMonitor === monitor else { return }
+            monitor.cancel()
+            self.networkMonitor = nil
+            VPNController.shared.connect()
         }
+        monitor.pathUpdateHandler = { path in if path.status == .satisfied { fire() } }
+        monitor.start(queue: .main)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: fire)
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled { try service.unregister() } else { try service.register() }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could not change Launch at Login"
+            alert.informativeText = "\(error.localizedDescription)\n\nMake sure the app is in /Applications."
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+        if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        launchAtLoginMenuItem.state = service.status == .enabled ? .on : .off
     }
 }
