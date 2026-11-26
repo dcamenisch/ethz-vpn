@@ -67,15 +67,27 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     }
 
     func save() {
-        let data = try? JSONEncoder().encode(profiles)
-        try? data?.write(to: storeURL, options: .atomic)
+        guard let data = try? JSONEncoder().encode(profiles) else { return }
+        try? data.write(to: storeURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storeURL.path)
+    }
+
+    static func makeID(from name: String) -> String {
+        let id = name.lowercased().replacingOccurrences(of: " ", with: "-")
+            .filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+        return id.isEmpty ? UUID().uuidString.lowercased() : id
     }
 
     // MARK: - Mutation
 
-    func upsert(_ profile: VPNProfile, password: String, token: String) {
-        _ = KeychainHelper.set(service: profile.passwordService, value: password)
-        _ = KeychainHelper.set(service: profile.tokenService,   value: token)
+    struct KeychainError: LocalizedError {
+        var errorDescription: String? { "Could not save the credentials to the Keychain." }
+    }
+
+    /// `nil` secrets keep the values already in the Keychain.
+    func upsert(_ profile: VPNProfile, password: String?, token: String?) throws {
+        if let password, !KeychainHelper.set(service: profile.passwordService, value: password) { throw KeychainError() }
+        if let token, !KeychainHelper.set(service: profile.tokenService, value: token) { throw KeychainError() }
         if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[idx] = profile
         } else {

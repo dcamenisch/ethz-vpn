@@ -183,10 +183,10 @@ struct ProfileEditFormView: View {
                     HStack(spacing: 4) {
                         Group {
                             if vm.showPassword {
-                                TextField("Password", text: $vm.password)
+                                TextField(vm.secretPlaceholder("Password"), text: $vm.password)
                                     .focused($focus, equals: .password)
                             } else {
-                                SecureField("Password", text: $vm.password)
+                                SecureField(vm.secretPlaceholder("Password"), text: $vm.password)
                                     .focused($focus, equals: .password)
                             }
                         }
@@ -202,10 +202,10 @@ struct ProfileEditFormView: View {
                     HStack(spacing: 4) {
                         Group {
                             if vm.showOTP {
-                                TextField("TOTP seed", text: $vm.otpSecret)
+                                TextField(vm.secretPlaceholder("Base32 key or otpauth:// link"), text: $vm.otpSecret)
                                     .focused($focus, equals: .otp)
                             } else {
-                                SecureField("TOTP seed", text: $vm.otpSecret)
+                                SecureField(vm.secretPlaceholder("Base32 key or otpauth:// link"), text: $vm.otpSecret)
                                     .focused($focus, equals: .otp)
                             }
                         }
@@ -271,8 +271,9 @@ struct ProfileEditFormView: View {
     var isSaving = false
     var errorMessage: String? = nil
 
-    // nil = new profile; non-nil = editing existing id
     private let profileID: String?
+    /// Profile whose saved secrets are kept when the secret fields are left blank.
+    private let secretsSource: VPNProfile?
     let title: String
 
     var canSave: Bool { !isSaving }
@@ -282,27 +283,20 @@ struct ProfileEditFormView: View {
         return nil
     }
 
+    func secretPlaceholder(_ base: String) -> String {
+        secretsSource == nil ? base : "Saved — leave blank to keep"
+    }
+
     init(profile: VPNProfile?, isDuplicate: Bool = false) {
-        if isDuplicate {
-            // New profile — no existing id, but pre-fill fields and suggest a new name
-            profileID   = nil
-            displayName = profile.map { "\($0.displayName) Copy" } ?? ""
-            title       = "Duplicate Profile"
-        } else {
-            profileID   = profile?.id
-            displayName = profile?.displayName ?? ""
-            title       = profile == nil ? "Add Profile" : "Edit Profile"
-        }
-        username  = profile?.username ?? ""
-        realm     = profile?.realm ?? AppConstants.defaultRealm
-        server    = profile?.server ?? AppConstants.defaultServer
-        if let p = profile {
-            password  = ProfileStore.shared.password(for: p) ?? ""
-            otpSecret = ProfileStore.shared.token(for: p) ?? ""
-        } else {
-            password  = ""
-            otpSecret = ""
-        }
+        profileID     = isDuplicate ? nil : profile?.id
+        secretsSource = profile
+        displayName   = profile.map { isDuplicate ? "\($0.displayName) Copy" : $0.displayName } ?? ""
+        title         = isDuplicate ? "Duplicate Profile" : (profile == nil ? "Add Profile" : "Edit Profile")
+        username      = profile?.username ?? ""
+        realm         = profile?.realm ?? AppConstants.defaultRealm
+        server        = profile?.server ?? AppConstants.defaultServer
+        password      = ""
+        otpSecret     = ""
     }
 
     func save(completion: @escaping () -> Void) {
@@ -316,15 +310,33 @@ struct ProfileEditFormView: View {
 
         guard !trimName.isEmpty     else { errorMessage = "Name is required.";     return }
         guard !trimUsername.isEmpty else { errorMessage = "Username is required."; return }
-        guard !password.isEmpty     else { errorMessage = "Password is required."; return }
-        guard !trimOTP.isEmpty      else { errorMessage = "OTP Secret is required."; return }
 
-        let id = profileID ?? trimName.lowercased().replacingOccurrences(of: " ", with: "-")
+        let store = ProfileStore.shared
+        var newPassword: String? = password.isEmpty ? nil : password
+        var newToken: String? = trimOTP.isEmpty ? nil : trimOTP
+        if profileID == nil {
+            if let source = secretsSource {
+                newPassword = newPassword ?? store.password(for: source)
+                newToken = newToken ?? store.token(for: source)
+            }
+            guard newPassword != nil else { errorMessage = "Password is required."; return }
+            guard newToken != nil    else { errorMessage = "OTP Secret is required."; return }
+        }
+
+        let id = profileID ?? ProfileStore.makeID(from: trimName)
+        if profileID == nil, store.profiles.contains(where: { $0.id == id }) {
+            errorMessage = "A profile with this name already exists."
+            return
+        }
         let profile = VPNProfile(id: id, displayName: trimName, username: trimUsername, realm: trimRealm, server: trimServer)
+        do {
+            try store.upsert(profile, password: newPassword, token: newToken)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
 
         isSaving = true
-        ProfileStore.shared.upsert(profile, password: password, token: trimOTP)
-
         guard !PrivilegedHelper.isInstalled() else { isSaving = false; completion(); return }
         PrivilegedHelper.install { [weak self] result in
             self?.isSaving = false
