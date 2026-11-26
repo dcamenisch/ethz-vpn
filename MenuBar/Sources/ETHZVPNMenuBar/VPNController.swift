@@ -66,32 +66,9 @@ final class VPNController {
 
         setState(.connecting)
 
-        let openconnectPath = bundledOpenconnectPath()
-
-        // Write token config to a temp file (mode 0600) so the secret never
-        // appears in the process argument list (visible via `ps aux`).
-        let configPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ethz-vpn-\(UUID().uuidString).conf").path
-        let configContent = "token-mode=totp\ntoken-secret=sha1:base32:\(token)\n"
-        let configData = configContent.data(using: .utf8)!
-        FileManager.default.createFile(atPath: configPath, contents: configData,
-                                       attributes: [.posixPermissions: 0o600])
-
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        // Run openconnect WITHOUT -b: we keep the process alive in the background
-        // via Swift's Process (which is already async). The -b flag causes openconnect
-        // to fork-and-exit, which tears down stdin before the child can read the password.
-        process.arguments = [
-            openconnectPath,
-            "-u", "\(username)@\(realm).ethz.ch",
-            "-g", realm,
-            "--useragent=AnyConnect",
-            "--passwd-on-stdin",
-            "--config", configPath,
-            "--no-external-auth",
-            server
-        ]
+        process.arguments = ["-n", PrivilegedHelper.helperPath, "connect", username, realm, server]
 
         let stdinPipe = Pipe()
         let stderrPipe = Pipe()
@@ -100,8 +77,6 @@ final class VPNController {
         process.standardError = stderrPipe
 
         process.terminationHandler = { [weak self] proc in
-            // Config file is no longer needed once the process exits
-            try? FileManager.default.removeItem(atPath: configPath)
             let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
             let errText = String(data: errData, encoding: .utf8) ?? ""
             DispatchQueue.main.async {
@@ -125,12 +100,10 @@ final class VPNController {
         do {
             try process.run()
             openconnectProcess = process
-            // Write password then close stdin so openconnect knows input is done
-            let input = (password + "\n").data(using: .utf8)!
+            let input = Data("\(password)\n\(token)\n".utf8)
             stdinPipe.fileHandleForWriting.write(input)
             stdinPipe.fileHandleForWriting.closeFile()
         } catch {
-            try? FileManager.default.removeItem(atPath: configPath)
             setState(.disconnected)
             postNotification(body: "Failed to launch openconnect: \(error.localizedDescription)")
         }
@@ -149,12 +122,9 @@ final class VPNController {
         guard isOpenconnectRunning() else { return }
         setState(.disconnecting)
         openconnectProcess = nil  // disown so any pending terminationHandler is a no-op
-        shell("/usr/bin/sudo", ["/usr/bin/pkill", "-SIGINT", "-x", "openconnect"])
-        // Force-kill fallback: if still running after 6s, send SIGKILL
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            guard case .disconnecting = self?.state else { return }
-            _ = self?.shell("/usr/bin/sudo", ["/usr/bin/pkill", "-SIGKILL", "-x", "openconnect"])
-            self?.setState(.disconnected)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.shell("/usr/bin/sudo", ["-n", PrivilegedHelper.helperPath, "disconnect"])
+            DispatchQueue.main.async { if case .disconnecting = self?.state { self?.setState(.disconnected) } }
         }
     }
 
@@ -242,28 +212,6 @@ final class VPNController {
         process.waitUntilExit()
         return process.terminationStatus
     }
-
-    private func bundledOpenconnectPath() -> String {
-        // 1. Canonical bundle location: Contents/Resources/openconnect
-        //    This must match the path written into the sudoers rule.
-        //    We check this before Bundle.main.path(forResource:) because SPM may
-        //    nest a second copy under Resources/Resources/ which would mismatch.
-        if let bundleResources = Bundle.main.resourceURL {
-            let canonical = bundleResources.appendingPathComponent("openconnect").path
-            let real = URL(fileURLWithPath: canonical).resolvingSymlinksInPath().path
-            if FileManager.default.isExecutableFile(atPath: real) { return real }
-        }
-        // 2. Homebrew fallbacks (developer machine)
-        for path in ["/opt/homebrew/bin/openconnect", "/usr/local/bin/openconnect"] {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-                return FileManager.default.isExecutableFile(atPath: real) ? real : path
-            }
-        }
-        return "openconnect"
-    }
-
-    func resolvedOpenconnectPath() -> String { bundledOpenconnectPath() }
 
     func postNotification(body: String) {
         let content = UNMutableNotificationContent()

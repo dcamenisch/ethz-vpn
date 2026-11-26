@@ -245,9 +245,7 @@ struct ProfileEditFormView: View {
                 Spacer()
                 Button("Cancel") { onDone() }.keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    vm.save(openconnectPath: VPNController.shared.resolvedOpenconnectPath()) {
-                        onDone()
-                    }
+                    vm.save { onDone() }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!vm.canSave)
@@ -307,7 +305,7 @@ struct ProfileEditFormView: View {
         }
     }
 
-    func save(openconnectPath: String, completion: @escaping () -> Void) {
+    func save(completion: @escaping () -> Void) {
         let trimName     = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimOTP      = otpSecret.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -327,9 +325,12 @@ struct ProfileEditFormView: View {
         isSaving = true
         ProfileStore.shared.upsert(profile, password: password, token: trimOTP)
 
-        SudoersHelper.installIfNeeded(openconnectPath: openconnectPath) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.isSaving = false
+        guard !PrivilegedHelper.isInstalled() else { isSaving = false; completion(); return }
+        PrivilegedHelper.install { [weak self] result in
+            self?.isSaving = false
+            if case .failure(let error) = result {
+                self?.errorMessage = error.localizedDescription
+            } else {
                 completion()
             }
         }

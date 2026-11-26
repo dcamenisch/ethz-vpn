@@ -166,8 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(true, forKey: firstRunDoneKey)
 
         let store = ProfileStore.shared
-        let ready = store.hasAnyCompleteProfile
-            && SudoersHelper.isInstalled(openconnectPath: VPNController.shared.resolvedOpenconnectPath())
+        let ready = store.hasAnyCompleteProfile && PrivilegedHelper.isInstalled()
         if !ready { openSetupWindow() }
     }
 
