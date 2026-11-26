@@ -58,12 +58,8 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     // MARK: - Persistence
 
     func load() {
-        guard let data = try? Data(contentsOf: storeURL),
-              let decoded = try? JSONDecoder().decode([VPNProfile].self, from: data) else {
-            profiles = migratedLegacyProfile().map { [$0] } ?? []
-            return
-        }
-        profiles = decoded
+        profiles = (try? Data(contentsOf: storeURL))
+            .flatMap { try? JSONDecoder().decode([VPNProfile].self, from: $0) } ?? []
     }
 
     func save() {
@@ -121,28 +117,4 @@ struct VPNProfile: Codable, Identifiable, Equatable {
     }
 
     var hasAnyCompleteProfile: Bool { profiles.contains(where: { isComplete(profile: $0) }) }
-
-    // MARK: - Legacy migration (single-profile flat files → first profile)
-
-    private func migratedLegacyProfile() -> VPNProfile? {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/share/ethz-vpn-connect")
-        let usernameURL = dir.appendingPathComponent("ethzvpnusername.txt")
-        guard let username = try? String(contentsOf: usernameURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !username.isEmpty,
-              KeychainHelper.exists(service: "eth-vpn-password"),
-              KeychainHelper.exists(service: "eth-vpn-token") else { return nil }
-
-        let realmURL = dir.appendingPathComponent("ethzvpnrealm.txt")
-        let realm = (try? String(contentsOf: realmURL, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines))
-            .flatMap { $0.isEmpty ? nil : $0 } ?? AppConstants.defaultRealm
-
-        // Migrate Keychain entries to new keys
-        let profile = VPNProfile(id: "default", displayName: "Default", username: username, realm: realm)
-        if let pw  = KeychainHelper.get(service: "eth-vpn-password") { _ = KeychainHelper.set(service: profile.passwordService, value: pw) }
-        if let tok = KeychainHelper.get(service: "eth-vpn-token")    { _ = KeychainHelper.set(service: profile.tokenService,    value: tok) }
-        return profile
-    }
 }
