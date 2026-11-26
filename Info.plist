@@ -9,9 +9,9 @@
     <key>CFBundleDisplayName</key>
     <string>ETHZ VPN</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.4</string>
+    <string>2.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
