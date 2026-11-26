@@ -1,13 +1,13 @@
 import Foundation
 
 struct VPNProfile: Codable, Identifiable, Equatable {
-    var id: String       // unique name, used as Keychain key suffix
+    var id: String
     var displayName: String
     var username: String
     var realm: String
     var server: String
 
-    /// Backward-compatible decoder: older profiles without `server` default to sslvpn.ethz.ch
+    /// Profiles saved before `server` existed default to sslvpn.ethz.ch.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id          = try c.decode(String.self, forKey: .id)
@@ -39,13 +39,12 @@ struct VPNProfile: Codable, Identifiable, Equatable {
         return dir.appendingPathComponent("profiles.json")
     }()
 
-    private let activeProfileIDKey = "eth-vpn-active-profile-id"
+    private static let activeProfileIDKey = "eth-vpn-active-profile-id"
 
     private(set) var profiles: [VPNProfile] = []
 
-    @ObservationIgnored var activeProfileID: String? {
-        get { UserDefaults.standard.string(forKey: activeProfileIDKey) }
-        set { UserDefaults.standard.set(newValue, forKey: activeProfileIDKey) }
+    var activeProfileID = UserDefaults.standard.string(forKey: activeProfileIDKey) {
+        didSet { UserDefaults.standard.set(activeProfileID, forKey: Self.activeProfileIDKey) }
     }
 
     var activeProfile: VPNProfile? {
@@ -57,7 +56,7 @@ struct VPNProfile: Codable, Identifiable, Equatable {
 
     // MARK: - Persistence
 
-    func load() {
+    private func load() {
         profiles = (try? Data(contentsOf: storeURL))
             .flatMap { try? JSONDecoder().decode([VPNProfile].self, from: $0) } ?? []
     }
