@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var setupWindowController: SetupWindowController?
     private var networkMonitor: NWPathMonitor?
     private var pulseTimer: Timer?
+    private var menuIsOpen = false
 
     private let autoConnectKey = "eth-vpn-auto-connect"
     private let firstRunDoneKey = "eth-vpn-did-complete-first-run"
@@ -25,7 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp, .rightMouseDown])
 
-        vpn.onStateChange = { [weak self] _ in DispatchQueue.main.async { self?.updateIcon() } }
+        vpn.onStateChange = { [weak self] _ in DispatchQueue.main.async { self?.stateChanged() } }
         vpn.onError = { [weak self] message in self?.showConnectionError(message) }
         NotificationCenter.default.addObserver(self, selector: #selector(openProfiles), name: .vpnSecretsNotFound, object: nil)
 
@@ -57,6 +58,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func stateChanged() {
+        updateIcon()
+        if menuIsOpen { menuNeedsUpdate(menu) }
+    }
+
     private func updateIcon() {
         guard let button = statusItem.button else { return }
         let style = StatusStyle.current
@@ -74,7 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Menu (rebuilt each time it opens)
+    // MARK: - Menu (rebuilt on open and on state changes while open)
+
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
+    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
