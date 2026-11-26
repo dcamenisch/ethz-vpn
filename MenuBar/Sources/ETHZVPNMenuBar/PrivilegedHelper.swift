@@ -3,7 +3,7 @@ import Foundation
 /// Installs the root helper. The sudoers rule allows only the helper, which
 /// lives in a root-owned directory with its own copies of openconnect and vpnc-script.
 enum PrivilegedHelper {
-    static let expectedVersion = "2"
+    static let expectedVersion = "3"
     static let installDir  = "/Library/PrivilegedHelperTools/ethz-vpn"
     static let helperPath  = installDir + "/ethz-vpn-helper"
     static let sudoersPath = "/etc/sudoers.d/ethz-vpn"

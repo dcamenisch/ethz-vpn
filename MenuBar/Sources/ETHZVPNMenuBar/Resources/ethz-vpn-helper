@@ -14,7 +14,7 @@ umask 077
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 IFS=$' \t\n'
 
-readonly HELPER_VERSION=2
+readonly HELPER_VERSION=3
 readonly BASE_DIR=/Library/PrivilegedHelperTools/ethz-vpn
 readonly OPENCONNECT="$BASE_DIR/Resources/openconnect"
 readonly VPNC_SCRIPT="$BASE_DIR/Resources/vpnc-script"
@@ -39,6 +39,20 @@ check_install() {
 	[[ -f $VPNC_SCRIPT ]] || die "vpnc-script is missing from $BASE_DIR — reinstall the helper from the app" "$EX_UNAVAILABLE"
 }
 
+# A session killed before vpnc-script cleans up leaves a host route to the VPN
+# server via the old network's gateway, which breaks every later connect.
+clear_stale_server_route() {
+	local host=${1%%:*} gateway ip dest via
+	gateway=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
+	for ip in $(dscacheutil -q host -a name "$host" | awk '/^ip_address:/ {print $2}'); do
+		dest=$(route -n get "$ip" 2>/dev/null | awk '/destination:/ {print $2}')
+		via=$(route -n get "$ip" 2>/dev/null | awk '/gateway:/ {print $2}')
+		if [[ $dest == "$ip" && -n $via && $via != "$gateway" ]]; then
+			route -n delete -host "$ip" >/dev/null 2>&1 || true
+		fi
+	done
+}
+
 cmd_connect() {
 	local background=$1 username=$2 realm=$3 server=$4
 
@@ -50,6 +64,8 @@ cmd_connect() {
 	if pgrep -x openconnect >/dev/null 2>&1; then
 		die "openconnect is already running — disconnect first" "$EX_TEMPFAIL"
 	fi
+
+	clear_stale_server_route "$server"
 
 	local password="" token=""
 	IFS= read -r password || true
