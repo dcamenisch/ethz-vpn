@@ -1,5 +1,9 @@
 import AppKit
 
+if CommandLine.arguments.dropFirst().first == "--connect" {
+    exit(CLIConnect.run(profileName: CommandLine.arguments.dropFirst(2).first))
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

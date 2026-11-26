@@ -6,18 +6,18 @@
 
 <p align="center">One click to the ETH Zurich VPN from the macOS menu bar, secured with Touch ID.</p>
 
-ETHZ VPN wraps [OpenConnect](https://www.infradead.org/openconnect/) so you never have to type your password or a one-time code again. Your WLAN password and OTP secret stay in the macOS Keychain, the app generates the TOTP code itself, and Touch ID confirms it is really you before every connection.
+ETHZ VPN wraps [OpenConnect](https://www.infradead.org/openconnect/) so you never have to type your password or a one-time code again. Your WLAN password and OTP secret are encrypted with a key in your Mac's Secure Enclave, the app generates the TOTP code itself, and only Touch ID unlocks them for a connection.
 
 Not affiliated with or endorsed by ETH Zurich.
 
 ## Features
 
 - **Menu bar status.** An ETHZ badge that turns green when connected, plus a live status card with your VPN IP and connection time.
-- **Touch ID instead of typing codes.** Connecting needs your fingerprint (or Mac password), so an unlocked Mac alone is not enough.
+- **Touch ID instead of typing codes.** Your secrets can only be decrypted after Touch ID (or your Mac password), so an unlocked Mac alone is not enough.
 - **Clear errors.** Failed logins, unreachable servers and setup problems show a readable message, and the full log can be copied from the menu.
 - **Profiles.** Separate profiles for `student-net`, `staff-net` or other realms. Right-click (or Control-click) the badge to toggle the default profile.
 - **Connect at login.** Combine *Launch at Login* and *Connect at Launch* to be on the VPN right after you log in.
-- **CLI.** `ethz-vpn connect` from the terminal, sharing the same profiles and Keychain entries.
+- **CLI.** `ethz-vpn connect` from the terminal, with the same profiles and Touch ID prompt.
 
 ## Install
 
@@ -47,10 +47,10 @@ OpenConnect needs root to create the tunnel. A one-time install puts a small hel
 
 - The helper accepts only `connect`, `disconnect` and `version`, validates every argument, and runs OpenConnect with fixed options. It cannot be used to run other commands as root.
 - Your password and OTP secret are passed to the helper on stdin. They never appear in process arguments or user-writable files.
-- Secrets are stored in the login Keychain and are never shown in the app again after saving.
-- Touch ID is a presence check enforced by the app. It protects against someone using your unlocked Mac, not against malware running as your user, which could read the Keychain items the same way the app does.
+- Secrets are encrypted to a Secure Enclave key that requires Touch ID or your Mac password for every use. The Keychain only holds ciphertext, so neither someone at your unlocked Mac nor malware running as your user can read them without you approving the prompt. The key never leaves this Mac.
+- Saved secrets are never shown in the app again.
 
-Saving the OTP secret on your Mac turns the Mac into your second factor. Treat it like your phone's authenticator app.
+Saving the OTP secret on your Mac turns the Mac, together with your fingerprint, into your second factor.
 
 ## CLI
 
@@ -59,14 +59,13 @@ ln -s "$(pwd)/ethz-vpn.sh" /usr/local/bin/ethz-vpn
 ```
 
 ```
-ethz-vpn connect [profile]   Connect (default profile if omitted)
+ethz-vpn connect [profile]   Connect (default profile if omitted), asks for Touch ID
 ethz-vpn disconnect          Disconnect
 ethz-vpn status              Show connection status
 ethz-vpn profiles            List profiles
-ethz-vpn add | edit <name> | delete <name> | default <name>
 ```
 
-The CLI uses the helper installed by the app and does not ask for Touch ID.
+Profiles are managed in the app. Connecting runs the app binary, since only it can unlock the secrets.
 
 ## Troubleshooting
 
@@ -92,6 +91,7 @@ With only the Command Line Tools installed (no Xcode), point the build at an SDK
 make uninstall
 security delete-generic-password -a "$USER" -s eth-vpn-password-<profile-id>
 security delete-generic-password -a "$USER" -s eth-vpn-token-<profile-id>
+security delete-generic-password -a "$USER" -s eth-vpn-enclave-key
 rm -rf ~/.local/share/ethz-vpn-connect
 ```
 
