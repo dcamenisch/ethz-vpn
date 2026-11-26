@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profilesConnectMenuItem: NSMenuItem! // submenu when profiles exist
     private var disconnectMenuItem: NSMenuItem!
     private var launchAtLoginMenuItem: NSMenuItem!
+    private var requireAuthMenuItem: NSMenuItem!
 
     var setupWindowController: SetupWindowController?
 
@@ -63,6 +64,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let manageProfiles = NSMenuItem(title: "Manage Profiles...", action: #selector(showSetupTapped), keyEquivalent: "")
         manageProfiles.target = self
         menu.addItem(manageProfiles)
+
+        requireAuthMenuItem = NSMenuItem(title: "Require Touch ID to Connect", action: #selector(toggleRequireAuth), keyEquivalent: "")
+        requireAuthMenuItem.target = self
+        requireAuthMenuItem.state = Authenticator.isRequired ? .on : .off
+        menu.addItem(requireAuthMenuItem)
 
         launchAtLoginMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         launchAtLoginMenuItem.target = self
@@ -270,6 +276,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func disconnectTapped() {
         VPNController.shared.disconnect()
+    }
+
+    @objc private func toggleRequireAuth() {
+        guard Authenticator.isRequired else {
+            Authenticator.isRequired = true
+            requireAuthMenuItem.state = .on
+            return
+        }
+        Authenticator.authenticate(reason: "turn off Touch ID for VPN connections", force: true) { [weak self] ok, _ in
+            guard ok else { return }
+            Authenticator.isRequired = false
+            self?.requireAuthMenuItem.state = .off
+        }
     }
 
     @objc private func toggleLaunchAtLogin() {

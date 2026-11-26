@@ -48,19 +48,27 @@ final class VPNController {
 
     func connect(profile: VPNProfile? = nil) {
         guard case .disconnected = state else { return }
-        let store = ProfileStore.shared
-        guard let target = profile ?? store.activeProfile, !target.username.isEmpty else {
+        guard let target = profile ?? ProfileStore.shared.activeProfile, !target.username.isEmpty else {
             NotificationCenter.default.post(name: .vpnSecretsNotFound, object: nil)
             return
         }
+        ProfileStore.shared.activeProfileID = target.id
+        lastError = nil
+        setState(.connecting)
+        Authenticator.authenticate(reason: "connect to the ETH VPN as \(target.username)") { [weak self] ok, error in
+            guard let self else { return }
+            if ok { self.start(target) }
+            else if let error { self.fail(error) }
+            else { self.setState(.disconnected) }
+        }
+    }
+
+    private func start(_ target: VPNProfile) {
+        let store = ProfileStore.shared
         guard let password = store.password(for: target), let token = store.token(for: target) else {
             fail("No password or OTP secret is saved for “\(target.displayName)”. Edit the profile and enter them again.")
             return
         }
-        store.activeProfileID = target.id
-        lastError = nil
-        setState(.connecting)
-
         if PrivilegedHelper.isInstalled() {
             launch(target, password: password, token: token)
             return
